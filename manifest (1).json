@@ -1,4 +1,4 @@
-{
+<link rel="manifest" href="/hatch/manifest.json">
   "id": "/",
   "name": "HATCH",
   "short_name": "HATCH",
