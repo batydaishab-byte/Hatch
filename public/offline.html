@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>هتش — غير متصل بالإنترنت | HATCH Offline</title>
+    <meta name="theme-color" content="#0a0a0a" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        -webkit-tap-highlight-color: transparent;
+      }
+      body {
+        font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+        background-color: #0a0a0a;
+        color: #f5f5f5;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        text-align: center;
+      }
+      .card {
+        background: #171717;
+        border: 1px solid #262626;
+        border-radius: 28px;
+        padding: 36px 24px;
+        max-width: 440px;
+        width: 100%;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .icon-box {
+        width: 80px;
+        height: 80px;
+        background: rgba(245, 158, 11, 0.12);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        border-radius: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+        color: #f59e0b;
+      }
+      .pulse-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 9999px;
+        background-color: #ef4444;
+        display: inline-block;
+        margin-left: 6px;
+        animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.85); }
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 900;
+        margin-bottom: 10px;
+        color: #ffffff;
+      }
+      p {
+        font-size: 13px;
+        line-height: 1.6;
+        color: #a3a3a3;
+        margin-bottom: 24px;
+      }
+      .badge-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #262626;
+        border: 1px solid #404040;
+        border-radius: 12px;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #fbbf24;
+        margin-bottom: 20px;
+      }
+      .btn-reload {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        padding: 14px 20px;
+        background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+        color: #0a0a0a;
+        font-size: 14px;
+        font-weight: 900;
+        border: none;
+        border-radius: 16px;
+        cursor: pointer;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        box-shadow: 0 10px 25px -5px rgba(245, 158, 11, 0.3);
+      }
+      .btn-reload:hover {
+        transform: scale(1.02);
+      }
+      .btn-reload:active {
+        transform: scale(0.98);
+      }
+      .tips {
+        margin-top: 24px;
+        padding-top: 20px;
+        border-top: 1px solid #262626;
+        width: 100%;
+        text-align: right;
+        font-size: 11px;
+        color: #737373;
+        line-height: 1.5;
+      }
+      .tips-title {
+        font-weight: 700;
+        color: #d4d4d4;
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="badge-brand">
+        <img src="/pwa-192x192.png" width="20" height="20" style="border-radius: 6px; object-fit: cover;" alt="هتش" />
+        <span>هتش — HATCH SUDAN</span>
+      </div>
+
+      <div class="icon-box">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="1" y1="1" x2="23" y2="23"></line>
+          <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+          <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+          <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+          <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+          <line x1="12" y1="20" x2="12.01" y2="20"></line>
+        </svg>
+      </div>
+
+      <h1>
+        <span class="pulse-dot"></span>
+        لا يوجد اتصال بالإنترنت
+      </h1>
+
+      <p>
+        يبدو أن هناك انقطاعاً في شبكة الإنترنت حالياً. يمكنك إعادة المحاولة بمجرد عودة التغطية أو الاتصال بشبكة واي فاي / ستارلينك.
+      </p>
+
+      <button class="btn-reload" onclick="window.location.reload()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <polyline points="1 20 1 14 7 14"></polyline>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+        <span>إعادة المحاولة والتحديث</span>
+      </button>
+
+      <div class="tips">
+        <div class="tips-title">
+          <span>💡 نصائح سريعة لشبكات السودان:</span>
+        </div>
+        <ul style="padding-right: 18px; margin-top: 4px; space-y: 2px;">
+          <li>تأكد من تشغيل بيانات الهاتف (سوداني / زين / MTN).</li>
+          <li>إذا كنت تستخدم أندرويد، التطبيق يحتفظ بالصفحات التي زرتها مسبقاً.</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>

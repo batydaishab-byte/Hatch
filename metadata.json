@@ -1,0 +1,8 @@
+{
+  "name": "Remix HATCH — هتش | Marketplace",
+  "description": "A modern swipe-based second-hand marketplace application tailored for Sudan, featuring card discovery, local cities, Bankak hints, negotiation offers, and live chat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
