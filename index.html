@@ -1,8 +1,7 @@
+
 <!doctype html>
 <html lang="ar" dir="rtl">
   <head>
-<link rel="manifest" href="/Hatch/manifest.json">
-
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>HATCH — هتش | سوق الإعلانات والمنتجات المستعملة</title>
@@ -19,10 +18,11 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-    <link rel="icon" type="image/png" href="/pwa-192x192.png" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- المسارات النسبية الصحيحة لـ GitHub Pages -->
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="apple-touch-icon" href="./pwa-512x512.png" />
+    <link rel="icon" type="image/png" href="./pwa-512x512.png" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -33,7 +33,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/pwabuilder-sw.js')
+          navigator.serviceWorker.register('./pwabuilder-sw.js')
             .then((reg) => {
               console.log('HATCH Service Worker registered with scope:', reg.scope);
             })
@@ -46,6 +46,6 @@
   </head>
   <body class="bg-neutral-950 text-neutral-100 antialiased selection:bg-amber-500 selection:text-neutral-950 min-h-screen overflow-x-hidden font-sans">
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>
