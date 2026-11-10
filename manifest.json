@@ -1,12 +1,13 @@
+
 {
-  "id": "/",
+  "id": "./",
   "name": "هتش",
   "short_name": "هتش",
   "description": "HATCH (هتش) - سوق الإعلانات والمنتجات في السودان مع دعم بنكك وتجربة التمرير السريعة",
   "lang": "ar",
   "dir": "rtl",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a0a0a",
@@ -14,19 +15,19 @@
   "categories": ["shopping", "business", "lifestyle"],
   "icons": [
     {
-      "src": "/pwa-192x192.png",
+      "src": "./pwa-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-512x512.png",
+      "src": "./pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/pwa-maskable-512x512.png",
+      "src": "./pwa-maskable-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
@@ -37,22 +38,22 @@
       "name": "تصفح السوق",
       "short_name": "السوق",
       "description": "تصفح إعلانات وعروض البيع",
-      "url": "/?tab=browse",
-      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+      "url": "./index.html?tab=browse",
+      "icons": [{ "src": "./pwa-192x192.png", "sizes": "192x192" }]
     },
     {
       "name": "إضافة إعلان جديد",
       "short_name": "بيع",
       "description": "أضف منتجك للبيع مجاناً",
-      "url": "/?tab=sell",
-      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+      "url": "./index.html?tab=sell",
+      "icons": [{ "src": "./pwa-192x192.png", "sizes": "192x192" }]
     },
     {
       "name": "المحادثات والعروض",
       "short_name": "المحادثات",
       "description": "متابعة التفاوض والرسائل",
-      "url": "/?tab=messages",
-      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192" }]
+      "url": "./index.html?tab=messages",
+      "icons": [{ "src": "./pwa-192x192.png", "sizes": "192x192" }]
     }
   ]
 }
