@@ -1,0 +1,321 @@
+{
+  "entities": {
+    "PublicUser": {
+      "title": "PublicUser",
+      "description": "Public non-PII user profile shared across Web and Android Native clients",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "avatar": { "type": "string", "minLength": 0, "maxLength": 1000 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "rating": { "type": "number" },
+        "dealsCompleted": { "type": "integer" },
+        "reportsCount": { "type": "integer" },
+        "verifiedIdentity": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "suspendedUntil": { "type": "string", "maxLength": 64 },
+        "suspensionDays": { "type": "integer" },
+        "suspensionReason": { "type": "string", "maxLength": 500 },
+        "joinedDate": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "city", "rating", "dealsCompleted", "verifiedIdentity", "status", "joinedDate", "updatedAt"]
+    },
+    "PrivateUser": {
+      "title": "PrivateUser",
+      "description": "Isolated PII and RBAC metadata accessible only to the account owner or verified admins",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 160 },
+        "phone": { "type": "string", "minLength": 6, "maxLength": 32 },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "rewardCredits": { "type": "integer" },
+        "fcmTokens": { "type": "array", "description": "Bounded up to 5 device tokens" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "phone", "role", "rewardCredits", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Marketplace listing displayed in SwipeDeck, MarketBrowse, Favorites, and Profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "titleAr": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "titleEn": { "type": "string", "minLength": 0, "maxLength": 120 },
+        "descriptionAr": { "type": "string", "minLength": 5, "maxLength": 2000 },
+        "descriptionEn": { "type": "string", "minLength": 0, "maxLength": 2000 },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "category": {
+          "type": "string",
+          "enum": ["phones", "electronics", "vehicles", "furniture", "fashion", "appliances", "solar_energy", "real_estate", "books_hobbies"]
+        },
+        "condition": { "type": "string", "enum": ["new", "like_new", "good", "fair"] },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "areaAr": { "type": "string", "maxLength": 100 },
+        "areaEn": { "type": "string", "maxLength": 100 },
+        "images": { "type": "array", "description": "Up to 5 compressed WebP HTTPS URLs from free Cloudinary/CDN" },
+        "thumbnailUrl": { "type": "string", "maxLength": 1000, "description": "Compressed WebP 400px thumbnail URL to reduce feed bandwidth" },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "sellerAvatar": { "type": "string", "maxLength": 1000 },
+        "sellerRating": { "type": "number" },
+        "sellerDealsCount": { "type": "integer" },
+        "sellerVerified": { "type": "boolean" },
+        "paymentMethods": { "type": "array", "description": "Up to 4 methods: bankak, fawry, cash, ocash" },
+        "negotiable": { "type": "boolean" },
+        "deliveryAvailable": { "type": "boolean" },
+        "urgentSale": { "type": "boolean" },
+        "featured": { "type": "boolean" },
+        "viewsCount": { "type": "integer" },
+        "likesCount": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "sold", "under_review", "flagged"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "titleAr", "descriptionAr", "price", "category", "condition", "city", "images", "sellerId", "sellerName", "paymentMethods", "negotiable", "deliveryAvailable", "viewsCount", "likesCount", "status", "createdAt", "updatedAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Negotiation thread between buyer and seller tied to a specific product",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productTitle": { "type": "string", "maxLength": 140 },
+        "productPrice": { "type": "number" },
+        "productImage": { "type": "string", "maxLength": 1000 },
+        "buyerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantIds": { "type": "array", "description": "Exact 2-element array [buyerId, sellerId]" },
+        "buyerName": { "type": "string", "maxLength": 80 },
+        "buyerAvatar": { "type": "string", "maxLength": 1000 },
+        "sellerName": { "type": "string", "maxLength": 80 },
+        "sellerAvatar": { "type": "string", "maxLength": 1000 },
+        "lastMessage": { "type": "string", "maxLength": 500 },
+        "unreadByBuyer": { "type": "integer" },
+        "unreadBySeller": { "type": "integer" },
+        "offerAmount": { "type": "number" },
+        "counterAmount": { "type": "number" },
+        "offerStatus": { "type": "string", "enum": ["none", "pending", "accepted", "declined", "countered"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "productId", "buyerId", "sellerId", "participantIds", "lastMessage", "offerStatus", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual text, offer, image inspection, or voice message inside a conversation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "text": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["sent", "delivered", "read"] },
+        "isOfferUpdate": { "type": "boolean" },
+        "offerAmount": { "type": "number" },
+        "audioUrl": { "type": "string", "maxLength": 1000 },
+        "audioDuration": { "type": "integer" },
+        "imageUrl": { "type": "string", "maxLength": 1000 },
+        "imageTag": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "senderId", "status", "createdAt"]
+    },
+    "UserSwipe": {
+      "title": "UserSwipe",
+      "description": "User swipe interaction state for a product (left, right, superlike)",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "enum": ["left", "right", "superlike"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "action", "createdAt"]
+    },
+    "UserFavorite": {
+      "title": "UserFavorite",
+      "description": "Saved product reference in user's favorites subcollection",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "createdAt"]
+    },
+    "UserReview": {
+      "title": "UserReview",
+      "description": "Buyer/seller rating and review",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reviewerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reviewerName": { "type": "string", "maxLength": 80 },
+        "reviewerAvatar": { "type": "string", "maxLength": 1000 },
+        "rating": { "type": "integer" },
+        "comment": { "type": "string", "maxLength": 600 },
+        "tags": { "type": "array", "description": "Up to 6 review tags" },
+        "productId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sellerId", "reviewerId", "rating", "comment", "createdAt"]
+    },
+    "ReportTicket": {
+      "title": "ReportTicket",
+      "description": "Violation or scam report submitted to HATCH admin moderation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterName": { "type": "string", "maxLength": 80 },
+        "reportedUserId": { "type": "string", "maxLength": 128 },
+        "reportedProductId": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 5, "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "resolved", "dismissed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reporterId", "reason", "message", "status", "createdAt", "updatedAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "User notification or admin suspension/broadcast alert",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["offer", "message", "price_drop", "verification", "system", "alert", "update"] },
+        "titleAr": { "type": "string", "maxLength": 160 },
+        "titleEn": { "type": "string", "maxLength": 160 },
+        "bodyAr": { "type": "string", "maxLength": 1000 },
+        "bodyEn": { "type": "string", "maxLength": 1000 },
+        "read": { "type": "boolean" },
+        "relatedProductId": { "type": "string", "maxLength": 128 },
+        "relatedConversationId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "titleAr", "bodyAr", "read", "createdAt"]
+    },
+    "SponsoredAdItem": {
+      "title": "SponsoredAdItem",
+      "description": "Admin-managed sponsored image/video ad and click/impression telemetry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "titleAr": { "type": "string", "maxLength": 120 },
+        "titleEn": { "type": "string", "maxLength": 120 },
+        "advertiser": { "type": "string", "maxLength": 80 },
+        "descriptionAr": { "type": "string", "maxLength": 500 },
+        "descriptionEn": { "type": "string", "maxLength": 500 },
+        "imageUrl": { "type": "string", "maxLength": 1000 },
+        "videoUrl": { "type": "string", "maxLength": 1000 },
+        "mediaType": { "type": "string", "enum": ["image", "video"] },
+        "targetUrl": { "type": "string", "maxLength": 1000 },
+        "format": { "type": "string", "enum": ["banner", "interstitial", "rewarded", "native", "all"] },
+        "isActive": { "type": "boolean" },
+        "durationSeconds": { "type": "integer" },
+        "clicksCount": { "type": "integer" },
+        "impressionsCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "titleAr", "advertiser", "format", "isActive", "durationSeconds", "clicksCount", "impressionsCount", "createdAt", "updatedAt"]
+    },
+    "AdMobConfig": {
+      "title": "AdMobConfig",
+      "description": "Admin-controlled monetization & AdMob configuration",
+      "type": "object",
+      "properties": {
+        "isEnabled": { "type": "boolean" },
+        "isTestMode": { "type": "boolean" },
+        "ecpmRate": { "type": "number" },
+        "cpcRate": { "type": "number" },
+        "sdgRate": { "type": "number" },
+        "bannerRotationSeconds": { "type": "integer" },
+        "interstitialCountdownSeconds": { "type": "integer" },
+        "rewardedDurationSeconds": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["isEnabled", "isTestMode", "ecpmRate", "cpcRate", "sdgRate", "bannerRotationSeconds", "interstitialCountdownSeconds", "rewardedDurationSeconds", "updatedAt"]
+    },
+    "MediaQuotaStat": {
+      "title": "MediaQuotaStat",
+      "description": "Admin-only Cloudinary free tier usage monitor and alert state",
+      "type": "object",
+      "properties": {
+        "creditsUsed": { "type": "number" },
+        "creditsLimit": { "type": "number" },
+        "usagePercent": { "type": "number" },
+        "storageBytes": { "type": "integer" },
+        "bandwidthBytes": { "type": "integer" },
+        "isNearLimit": { "type": "boolean" },
+        "videoUploadsEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["creditsUsed", "creditsLimit", "usagePercent", "isNearLimit", "videoUploadsEnabled", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users_public/{userId}": {
+      "schema": { "$ref": "#/entities/PublicUser" },
+      "description": "Public profile attributes safe for display in marketplace listings and chat"
+    },
+    "/users_private/{userId}": {
+      "schema": { "$ref": "#/entities/PrivateUser" },
+      "description": "Isolated PII (email, phone) and RBAC role accessible only to owner or admin"
+    },
+    "/users_private/{userId}/swipes/{productId}": {
+      "schema": { "$ref": "#/entities/UserSwipe" },
+      "description": "Per-user swiped listing history"
+    },
+    "/users_private/{userId}/favorites/{productId}": {
+      "schema": { "$ref": "#/entities/UserFavorite" },
+      "description": "Per-user saved favorite listings"
+    },
+    "/users_private/{userId}/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "User-targeted notifications including offers and admin suspension notices"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Shared marketplace listings across Web and Android Native"
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Buyer-seller negotiation threads and offer status"
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Ordered chat messages, offer updates, voice notes, and inspection photos"
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/UserReview" },
+      "description": "Verified buyer/seller reviews"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/ReportTicket" },
+      "description": "User-submitted moderation reports"
+    },
+    "/sponsored_ads/{adId}": {
+      "schema": { "$ref": "#/entities/SponsoredAdItem" },
+      "description": "Admin-managed sponsored image and video campaigns"
+    },
+    "/ad_config/{configId}": {
+      "schema": { "$ref": "#/entities/AdMobConfig" },
+      "description": "Global AdMob and ad rotation settings managed by admin"
+    },
+    "/broadcast_notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "Admin broadcast announcements visible to signed-in users"
+    },
+    "/system_stats/{statId}": {
+      "schema": { "$ref": "#/entities/MediaQuotaStat" },
+      "description": "Admin-only Cloudinary usage and free-tier threshold warning metrics"
+    }
+  }
+}

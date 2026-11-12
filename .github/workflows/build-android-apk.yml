@@ -1,0 +1,93 @@
+name: Build HATCH Android Native APK
+
+on:
+  push:
+    paths:
+      - 'android-native/**'
+      - '.github/workflows/build-android-apk.yml'
+  pull_request:
+    paths:
+      - 'android-native/**'
+      - '.github/workflows/build-android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-debug-apk:
+    name: Build & Verify HATCH Debug APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-native
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK (API 35)
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Platform 35 & Build Tools 35.0.0
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configure optional Firebase google-services.json from GitHub Secret
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "${GOOGLE_SERVICES_JSON:-}" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "google-services.json configured from repository secret."
+          else
+            echo "No GOOGLE_SERVICES_JSON secret provided; building experimental APK with Firebase fallback."
+          fi
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+          gradle-home-cache-cleanup: true
+
+      - name: Run Unit Tests & Assemble Debug APK (android-native only)
+        run: |
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Verify APK Exists & Inspect Integrity
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -s "$APK_PATH" ]; then
+            echo "ERROR: $APK_PATH was not generated or is empty."
+            exit 1
+          fi
+
+          ls -lh "$APK_PATH"
+          unzip -t "$APK_PATH" >/dev/null
+          unzip -l "$APK_PATH" | grep -E "AndroidManifest\.xml|classes.*\.dex|resources\.arsc"
+
+          AAPT2="$ANDROID_HOME/build-tools/35.0.0/aapt2"
+          if [ -x "$AAPT2" ]; then
+            "$AAPT2" dump badging "$APK_PATH" | head -n 15
+          fi
+
+          echo "Verified installable debug APK at android-native/$APK_PATH" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload app-debug.apk Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hatch-app-debug-apk
+          path: android-native/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

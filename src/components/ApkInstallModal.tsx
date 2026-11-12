@@ -99,8 +99,12 @@ export const ApkInstallModal: React.FC<ApkInstallModalProps> = ({ isOpen, onClos
         {/* Modal Header */}
         <div className="flex items-center gap-3.5 mb-5">
           <div className="w-13 h-13 rounded-2xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 p-0.5 shadow-lg shadow-amber-500/20 shrink-0">
-            <div className="w-full h-full bg-neutral-950 rounded-[14px] flex items-center justify-center">
-              <Smartphone className="w-7 h-7 text-amber-400" />
+            <div className="w-full h-full bg-neutral-950 rounded-[14px] flex items-center justify-center overflow-hidden">
+              <img
+                src="/assets/aistudio/pwa-512x512_f8378661.png"
+                alt="هتش HATCH"
+                className="w-full h-full object-cover"
+              />
             </div>
           </div>
           <div>

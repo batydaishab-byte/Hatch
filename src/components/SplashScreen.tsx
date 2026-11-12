@@ -9,7 +9,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
   const [isFading, setIsFading] = useState(false);
   const [progress, setProgress] = useState(15);
 
-  const logoSrc = '/assets/aistudio/file_000000007ae48210a2463d89f629054c_b808c85d.png';
+  const logoSrc = '/assets/aistudio/pwa-512x512_f8378661.png';
 
   useEffect(() => {
     // Smooth progress simulation

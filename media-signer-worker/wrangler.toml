@@ -1,0 +1,11 @@
+name = "hatch-media-signer"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "rare-lambda-l7cdj"
+ADMIN_EMAIL = "batydaishab@gmail.com"
+# Set secrets ONLY via `npx wrangler secret put CLOUDINARY_API_SECRET` (never in git!):
+# - CLOUDINARY_CLOUD_NAME
+# - CLOUDINARY_API_KEY
+# - CLOUDINARY_API_SECRET

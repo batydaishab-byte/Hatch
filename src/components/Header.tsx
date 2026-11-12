@@ -49,7 +49,7 @@ export const Header: React.FC = () => {
           <div className="relative w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-600 via-amber-500 to-yellow-400 p-0.5 shadow-lg shadow-amber-500/25 group-hover:scale-105 transition-transform duration-300 shrink-0">
             <div className="w-full h-full bg-neutral-950 rounded-[14px] flex items-center justify-center overflow-hidden relative">
               <img
-                src="/assets/aistudio/file_000000007ae48210a2463d89f629054c_b808c85d.png"
+                src="/assets/aistudio/pwa-512x512_f8378661.png"
                 alt="هتش HATCH"
                 className="w-full h-full object-cover"
                 loading="eager"

@@ -1,0 +1,25 @@
+# Gradle & Android Build Outputs
+.gradle/
+build/
+app/build/
+captures/
+.navigation/
+output/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Local IDE & Environment
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Secrets & Keystores (NEVER commit real credentials to public repo)
+app/google-services.json
+google-services.json
+*.jks
+*.keystore
+keystore.properties
+.env*
