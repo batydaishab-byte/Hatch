@@ -36,13 +36,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK (API 35)
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
-      - name: Install Android Platform 35 & Build Tools 35.0.0
+      - name: Accept Android SDK Licenses & Install Platform 35 + Build Tools 35.0.0
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Configure optional Firebase google-services.json from GitHub Secret
         env:
