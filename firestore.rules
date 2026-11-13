@@ -143,7 +143,7 @@ service cloud.firestore {
 
     function isValidReview(data) {
       return data.keys().hasAll(['id', 'sellerId', 'reviewerId', 'rating', 'comment', 'createdAt'])
-        && data.keys().hasOnly(['id', 'sellerId', 'reviewerId', 'reviewerName', 'reviewerAvatar', 'rating', 'comment', 'tags', 'productId', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sellerId', 'reviewerId', 'reviewerName', 'reviewerAvatar', 'rating', 'comment', 'tags', 'productId', 'productTitle', 'createdAt'])
         && isValidId(data.id)
         && isValidId(data.sellerId)
         && isValidId(data.reviewerId)
@@ -154,17 +154,20 @@ service cloud.firestore {
         && (!('reviewerAvatar' in data) || (data.reviewerAvatar is string && data.reviewerAvatar.size() <= 1000))
         && (!('tags' in data) || (data.tags is list && data.tags.size() <= 6 && (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 50))))
         && (!('productId' in data) || isValidId(data.productId))
+        && (!('productTitle' in data) || (data.productTitle is string && data.productTitle.size() <= 140))
         && data.createdAt is timestamp;
     }
 
     function isValidReport(data) {
       return data.keys().hasAll(['id', 'reporterId', 'reason', 'message', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'reporterId', 'reporterName', 'reportedUserId', 'reportedProductId', 'reason', 'message', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'reporterId', 'reporterName', 'reportedUserId', 'reportedUserName', 'reportedProductId', 'reportedProductTitle', 'reason', 'message', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.reporterId)
         && (!('reporterName' in data) || (data.reporterName is string && data.reporterName.size() <= 80))
         && (!('reportedUserId' in data) || isValidId(data.reportedUserId))
+        && (!('reportedUserName' in data) || (data.reportedUserName is string && data.reportedUserName.size() <= 80))
         && (!('reportedProductId' in data) || isValidId(data.reportedProductId))
+        && (!('reportedProductTitle' in data) || (data.reportedProductTitle is string && data.reportedProductTitle.size() <= 140))
         && data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 120
         && data.message is string && data.message.size() >= 5 && data.message.size() <= 1500
         && data.status in ['pending', 'reviewed', 'resolved', 'dismissed']
@@ -189,7 +192,7 @@ service cloud.firestore {
 
     function isValidSponsoredAd(data) {
       return data.keys().hasAll(['id', 'titleAr', 'advertiser', 'format', 'isActive', 'durationSeconds', 'clicksCount', 'impressionsCount', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'advertiser', 'descriptionAr', 'descriptionEn', 'imageUrl', 'videoUrl', 'mediaType', 'targetUrl', 'format', 'isActive', 'durationSeconds', 'clicksCount', 'impressionsCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'advertiser', 'descriptionAr', 'descriptionEn', 'imageUrl', 'logoUrl', 'videoUrl', 'mediaType', 'ctaTextAr', 'ctaTextEn', 'targetUrl', 'category', 'badgeAr', 'badgeEn', 'format', 'isActive', 'durationSeconds', 'clicksCount', 'impressionsCount', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 120
         && (!('titleEn' in data) || (data.titleEn is string && data.titleEn.size() <= 120))
@@ -197,9 +200,15 @@ service cloud.firestore {
         && (!('descriptionAr' in data) || (data.descriptionAr is string && data.descriptionAr.size() <= 500))
         && (!('descriptionEn' in data) || (data.descriptionEn is string && data.descriptionEn.size() <= 500))
         && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000))
+        && (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 1000))
         && (!('videoUrl' in data) || (data.videoUrl is string && data.videoUrl.size() <= 1000))
         && (!('mediaType' in data) || data.mediaType in ['image', 'video'])
+        && (!('ctaTextAr' in data) || (data.ctaTextAr is string && data.ctaTextAr.size() <= 80))
+        && (!('ctaTextEn' in data) || (data.ctaTextEn is string && data.ctaTextEn.size() <= 80))
         && (!('targetUrl' in data) || (data.targetUrl is string && data.targetUrl.size() <= 1000))
+        && (!('category' in data) || (data.category is string && data.category.size() <= 60))
+        && (!('badgeAr' in data) || (data.badgeAr is string && data.badgeAr.size() <= 80))
+        && (!('badgeEn' in data) || (data.badgeEn is string && data.badgeEn.size() <= 80))
         && data.format in ['banner', 'interstitial', 'rewarded', 'native', 'all']
         && data.isActive is bool
         && data.durationSeconds is int && data.durationSeconds >= 1 && data.durationSeconds <= 300
@@ -211,9 +220,14 @@ service cloud.firestore {
 
     function isValidAdConfig(data) {
       return data.keys().hasAll(['isEnabled', 'isTestMode', 'ecpmRate', 'cpcRate', 'sdgRate', 'bannerRotationSeconds', 'interstitialCountdownSeconds', 'rewardedDurationSeconds', 'updatedAt'])
-        && data.keys().hasOnly(['isEnabled', 'isTestMode', 'ecpmRate', 'cpcRate', 'sdgRate', 'bannerRotationSeconds', 'interstitialCountdownSeconds', 'rewardedDurationSeconds', 'updatedAt'])
+        && data.keys().hasOnly(['isEnabled', 'isTestMode', 'admobAppId', 'bannerUnitId', 'interstitialUnitId', 'rewardedUnitId', 'nativeUnitId', 'ecpmRate', 'cpcRate', 'sdgRate', 'bannerRotationSeconds', 'interstitialCountdownSeconds', 'rewardedDurationSeconds', 'updatedAt'])
         && data.isEnabled is bool
         && data.isTestMode is bool
+        && (!('admobAppId' in data) || (data.admobAppId is string && data.admobAppId.size() <= 120))
+        && (!('bannerUnitId' in data) || (data.bannerUnitId is string && data.bannerUnitId.size() <= 120))
+        && (!('interstitialUnitId' in data) || (data.interstitialUnitId is string && data.interstitialUnitId.size() <= 120))
+        && (!('rewardedUnitId' in data) || (data.rewardedUnitId is string && data.rewardedUnitId.size() <= 120))
+        && (!('nativeUnitId' in data) || (data.nativeUnitId is string && data.nativeUnitId.size() <= 120))
         && data.ecpmRate is number && data.ecpmRate >= 0
         && data.cpcRate is number && data.cpcRate >= 0
         && data.sdgRate is number && data.sdgRate >= 1
@@ -266,7 +280,13 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'updatedAt']))
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'updatedAt'])) ||
+          (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'verifiedIdentity', 'updatedAt'])
+            && incoming().dealsCompleted == existing().dealsCompleted + 1
+            && incoming().verifiedIdentity == (incoming().dealsCompleted >= 10 && (!('reportsCount' in existing()) || existing().reportsCount == 0))
+          )
         );
       allow delete: if isValidId(userId) && isAdmin();
     }
@@ -291,7 +311,18 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(userId) && incoming().role == existing().role && incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'fcmTokens', 'updatedAt']))
+          (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'fcmTokens', 'updatedAt']) ||
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['rewardCredits', 'updatedAt'])
+                && incoming().rewardCredits >= existing().rewardCredits - 1
+                && incoming().rewardCredits <= existing().rewardCredits + 1
+              )
+            )
+          )
         );
       allow delete: if isValidId(userId) && isAdmin();
 
@@ -362,7 +393,7 @@ service cloud.firestore {
             isOwner(existing().sellerId)
             && existing().status != 'sold'
             && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'updatedAt']) ||
               (incoming().status == 'sold' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
             )
           ) ||
@@ -370,6 +401,15 @@ service cloud.firestore {
             existing().status == 'active'
             && incoming().status == 'flagged'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          (
+            existing().status == 'active'
+            && incoming().viewsCount >= existing().viewsCount
+            && incoming().viewsCount <= existing().viewsCount + 1
+            && incoming().likesCount >= 0
+            && incoming().likesCount >= existing().likesCount - 1
+            && incoming().likesCount <= existing().likesCount + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'likesCount', 'updatedAt'])
           )
         );
       allow delete: if isValidId(productId) && (isAdmin() || (isSignedIn() && isOwner(existing().sellerId)));

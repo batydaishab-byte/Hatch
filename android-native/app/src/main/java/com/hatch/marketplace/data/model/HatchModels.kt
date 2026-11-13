@@ -1,10 +1,42 @@
 package com.hatch.marketplace.data.model
 
 import com.google.firebase.Timestamp
+import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
+import kotlin.math.roundToInt
 
 enum class AppLanguage(val code: String) {
     AR("ar"),
     EN("en")
+}
+
+enum class MainTab {
+    SWIPE,
+    BROWSE,
+    CHAT,
+    FAVORITES,
+    PROFILE,
+    ADMIN
+}
+
+enum class ProfileSubTab {
+    MY_ADS,
+    SOLD_ADS,
+    SAVED,
+    SAFETY
+}
+
+enum class AdminSubTab {
+    REPORTS,
+    BROADCAST,
+    SOLD,
+    CONVERSATIONS,
+    FLAGGED,
+    MONETIZATION,
+    USERS
 }
 
 enum class CategoryId(val wireValue: String) {
@@ -16,21 +48,36 @@ enum class CategoryId(val wireValue: String) {
     APPLIANCES("appliances"),
     SOLAR_ENERGY("solar_energy"),
     REAL_ESTATE("real_estate"),
-    BOOKS_HOBBIES("books_hobbies")
+    BOOKS_HOBBIES("books_hobbies");
+
+    companion object {
+        fun fromWire(value: String): CategoryId =
+            entries.firstOrNull { it.wireValue == value } ?: PHONES
+    }
 }
 
 enum class ProductCondition(val wireValue: String) {
     NEW("new"),
     LIKE_NEW("like_new"),
     GOOD("good"),
-    FAIR("fair")
+    FAIR("fair");
+
+    companion object {
+        fun fromWire(value: String): ProductCondition =
+            entries.firstOrNull { it.wireValue == value } ?: GOOD
+    }
 }
 
 enum class PaymentMethod(val wireValue: String) {
     BANKAK("bankak"),
     FAWRY("fawry"),
     CASH("cash"),
-    OCASH("ocash")
+    OCASH("ocash");
+
+    companion object {
+        fun fromWire(value: String): PaymentMethod =
+            entries.firstOrNull { it.wireValue == value } ?: CASH
+    }
 }
 
 enum class ProductStatus(val wireValue: String) {
@@ -58,8 +105,26 @@ enum class AdFormat(val wireValue: String) {
     INTERSTITIAL("interstitial"),
     REWARDED("rewarded"),
     NATIVE("native"),
-    ALL("all")
+    ALL("all");
+
+    companion object {
+        fun fromWire(value: String): AdFormat =
+            entries.firstOrNull { it.wireValue == value } ?: BANNER
+    }
 }
+
+enum class ToastType {
+    SUCCESS,
+    INFO,
+    WARNING,
+    ERROR
+}
+
+data class UiToast(
+    val id: String,
+    val message: String,
+    val type: ToastType = ToastType.INFO
+)
 
 object SudaneseCities {
     val ALL: List<String> = listOf(
@@ -122,10 +187,6 @@ object SudaneseCities {
     )
 }
 
-/**
- * Shared Public User document stored at /users_public/{userId}
- * Contains NO PII (no email or phone).
- */
 data class PublicUser(
     val uid: String = "",
     val name: String = "",
@@ -143,10 +204,6 @@ data class PublicUser(
     val updatedAt: Timestamp? = null
 )
 
-/**
- * Isolated Private User document stored at /users_private/{userId}
- * Readable/writable ONLY by the owner or verified admin.
- */
 data class PrivateUser(
     val uid: String = "",
     val email: String = "",
@@ -158,9 +215,6 @@ data class PrivateUser(
     val updatedAt: Timestamp? = null
 )
 
-/**
- * Shared Marketplace Product stored at /products/{productId}
- */
 data class Product(
     val id: String = "",
     val titleAr: String = "",
@@ -241,6 +295,7 @@ data class UserReview(
     val comment: String = "",
     val tags: List<String> = emptyList(),
     val productId: String? = null,
+    val productTitle: String? = null,
     val createdAt: Timestamp? = null
 )
 
@@ -249,7 +304,9 @@ data class ReportTicket(
     val reporterId: String = "",
     val reporterName: String = "",
     val reportedUserId: String? = null,
+    val reportedUserName: String? = null,
     val reportedProductId: String? = null,
+    val reportedProductTitle: String? = null,
     val reason: String = "",
     val message: String = "",
     val status: String = "pending",
@@ -278,9 +335,15 @@ data class SponsoredAdItem(
     val descriptionAr: String = "",
     val descriptionEn: String = "",
     val imageUrl: String = "",
+    val logoUrl: String? = null,
     val videoUrl: String? = null,
     val mediaType: String = "image",
+    val ctaTextAr: String = "",
+    val ctaTextEn: String = "",
     val targetUrl: String = "",
+    val category: String = "",
+    val badgeAr: String = "",
+    val badgeEn: String = "",
     val format: String = AdFormat.BANNER.wireValue,
     val isActive: Boolean = true,
     val durationSeconds: Int = 8,
@@ -293,6 +356,11 @@ data class SponsoredAdItem(
 data class AdMobConfig(
     val isEnabled: Boolean = true,
     val isTestMode: Boolean = true,
+    val admobAppId: String = "",
+    val bannerUnitId: String = "",
+    val interstitialUnitId: String = "",
+    val rewardedUnitId: String = "",
+    val nativeUnitId: String = "",
     val ecpmRate: Double = 1.85,
     val cpcRate: Double = 0.14,
     val sdgRate: Double = 2650.0,
@@ -312,3 +380,175 @@ data class MediaQuotaStat(
     val videoUploadsEnabled: Boolean = false,
     val updatedAt: Timestamp? = null
 )
+
+data class MarketFilterState(
+    val searchQuery: String = "",
+    val selectedCategory: String = "all",
+    val selectedCity: String = "all",
+    val selectedCondition: String = "all",
+    val minPrice: Double = 0.0,
+    val maxPrice: Double = 5_000_000.0,
+    val unlimitedPrice: Boolean = true,
+    val onlyBankak: Boolean = false,
+    val onlyUrgent: Boolean = false,
+    val onlyNegotiable: Boolean = false
+) {
+    val activeFilterCount: Int
+        get() {
+            var count = 0
+            if (selectedCity != "all") count++
+            if (selectedCondition != "all") count++
+            if (!unlimitedPrice || minPrice > 0.0) count++
+            if (onlyBankak) count++
+            if (onlyUrgent) count++
+            if (onlyNegotiable) count++
+            return count
+        }
+}
+
+data class AdRevenueStats(
+    val totalImpressions: Int,
+    val totalClicks: Int,
+    val ctrPercent: Double,
+    val estimatedUsd: Double,
+    val estimatedSdg: Double
+)
+
+object HatchFormatters {
+    fun formatSdg(amount: Double, language: AppLanguage): String {
+        val nf = NumberFormat.getNumberInstance(Locale.US).apply {
+            maximumFractionDigits = 0
+        }
+        val formatted = nf.format(amount.roundToInt())
+        return if (language == AppLanguage.AR) "$formatted ج.س" else "$formatted SDG"
+    }
+
+    fun sanitizeFirestoreId(raw: String): String {
+        val cleaned = raw.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            .trim('_')
+            .take(120)
+        return cleaned.ifEmpty { "id_${System.currentTimeMillis()}" }
+    }
+
+    fun normalizeSudanPhone(raw: String): String {
+        val digits = raw.filter { it.isDigit() }
+        return when {
+            digits.startsWith("249") && digits.length >= 12 -> "+$digits"
+            digits.startsWith("0") && digits.length == 10 -> "+249${digits.drop(1)}"
+            digits.length == 9 -> "+249$digits"
+            raw.trim().startsWith("+") -> "+$digits"
+            else -> digits
+        }
+    }
+
+    fun isValidSudanPhone(raw: String): Boolean {
+        val normalized = normalizeSudanPhone(raw)
+        val digits = normalized.filter { it.isDigit() }
+        return digits.length in 9..15
+    }
+}
+
+object MarketplaceLogic {
+    const val AUTO_VERIFY_DEALS_THRESHOLD = 10
+
+    fun shouldAutoVerify(dealsCompleted: Int, reportsCount: Int): Boolean =
+        dealsCompleted >= AUTO_VERIFY_DEALS_THRESHOLD && reportsCount == 0
+
+    fun isAdminRole(role: String?, email: String?): Boolean {
+        val normalizedEmail = email?.trim()?.lowercase(Locale.ROOT)
+        return role == "admin" || normalizedEmail == "batydaishab@gmail.com"
+    }
+
+    fun isUserSuspended(
+        status: String,
+        suspendedUntilIso: String?,
+        nowMillis: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (status != UserStatus.SUSPENDED.wireValue) return false
+        if (suspendedUntilIso.isNullOrBlank()) return true
+        val expiryMillis = parseIsoTimestampMillis(suspendedUntilIso) ?: return true
+        return expiryMillis > nowMillis
+    }
+
+    fun buildSuspensionEndIso(days: Int, nowMillis: Long = System.currentTimeMillis()): String {
+        val safeDays = days.coerceIn(1, 3650)
+        val endMillis = nowMillis + safeDays * 86_400_000L
+        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        return fmt.format(Date(endMillis))
+    }
+
+    fun parseIsoTimestampMillis(iso: String): Long? {
+        val patterns = listOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd"
+        )
+        for (pattern in patterns) {
+            runCatching {
+                val fmt = SimpleDateFormat(pattern, Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+                return fmt.parse(iso)?.time
+            }
+        }
+        return null
+    }
+
+    fun filterProducts(
+        products: List<Product>,
+        filter: MarketFilterState,
+        activeOnly: Boolean = true
+    ): List<Product> {
+        val q = filter.searchQuery.trim().lowercase(Locale.ROOT)
+        return products.filter { p ->
+            if (activeOnly && p.status != ProductStatus.ACTIVE.wireValue) return@filter false
+            if (filter.selectedCategory != "all" && p.category != filter.selectedCategory) return@filter false
+            if (filter.selectedCity != "all" && p.city != filter.selectedCity) return@filter false
+            if (filter.selectedCondition != "all" && p.condition != filter.selectedCondition) return@filter false
+            if (p.price < filter.minPrice) return@filter false
+            if (!filter.unlimitedPrice && p.price > filter.maxPrice) return@filter false
+            if (filter.onlyBankak && !p.paymentMethods.contains(PaymentMethod.BANKAK.wireValue)) return@filter false
+            if (filter.onlyUrgent && !p.urgentSale) return@filter false
+            if (filter.onlyNegotiable && !p.negotiable) return@filter false
+            if (q.isNotBlank()) {
+                val haystack = listOf(
+                    p.titleAr, p.titleEn, p.descriptionAr, p.descriptionEn,
+                    p.city, p.areaAr, p.areaEn, p.sellerName
+                ).joinToString(" ").lowercase(Locale.ROOT)
+                if (!haystack.contains(q)) return@filter false
+            }
+            true
+        }.sortedWith(
+            compareByDescending<Product> { it.featured }
+                .thenByDescending { it.urgentSale }
+                .thenByDescending { it.createdAt?.seconds ?: 0L }
+        )
+    }
+
+    fun computeRevenueStats(ads: List<SponsoredAdItem>, config: AdMobConfig): AdRevenueStats {
+        val impressions = ads.sumOf { it.impressionsCount }
+        val clicks = ads.sumOf { it.clicksCount }
+        val ctr = if (impressions > 0) (clicks.toDouble() / impressions.toDouble()) * 100.0 else 0.0
+        val estimatedUsd = (impressions / 1000.0) * config.ecpmRate + clicks * config.cpcRate
+        val estimatedSdg = estimatedUsd * config.sdgRate
+        return AdRevenueStats(
+            totalImpressions = impressions,
+            totalClicks = clicks,
+            ctrPercent = ctr,
+            estimatedUsd = estimatedUsd,
+            estimatedSdg = estimatedSdg
+        )
+    }
+
+    private val DEPOSIT_SCAM_KEYWORDS = listOf(
+        "عربون", "تحويل مسبق", "حول لي", "بنكك قبل", "دفع مقدم",
+        "deposit", "upfront", "send first", "wire first", "prepay"
+    )
+
+    fun hasDepositWarningKeywords(text: String): Boolean {
+        val lower = text.lowercase(Locale.ROOT)
+        return DEPOSIT_SCAM_KEYWORDS.any { lower.contains(it) }
+    }
+}
