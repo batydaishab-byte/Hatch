@@ -18,7 +18,7 @@ android {
 
     defaultConfig {
         applicationId = "com.hatch.marketplace"
-        minSdk = 24
+        minSdk = 23
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
@@ -35,6 +35,13 @@ android {
         buildConfigField("String", "CLOUDINARY_CLOUD_NAME", "\"\"")
     }
 
+    signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -45,6 +52,7 @@ android {
             )
         }
         debug {
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
         }
     }

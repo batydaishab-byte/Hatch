@@ -67,7 +67,7 @@ jobs:
         run: |
           gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify APK Exists & Inspect Integrity
+      - name: Verify APK Installability, Signature, DEX & Resources
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
           if [ ! -s "$APK_PATH" ]; then
@@ -76,15 +76,46 @@ jobs:
           fi
 
           ls -lh "$APK_PATH"
-          unzip -t "$APK_PATH" >/dev/null
-          unzip -l "$APK_PATH" | grep -E "AndroidManifest\.xml|classes.*\.dex|resources\.arsc"
 
-          AAPT2="$ANDROID_HOME/build-tools/35.0.0/aapt2"
-          if [ -x "$AAPT2" ]; then
-            "$AAPT2" dump badging "$APK_PATH" | head -n 15
+          echo "=== 1. ZIP & Core APK Entries (Manifest, DEX, Resources) ==="
+          unzip -t "$APK_PATH" >/dev/null
+          MANIFEST_COUNT=$(unzip -l "$APK_PATH" | grep -c "AndroidManifest\.xml" || true)
+          DEX_COUNT=$(unzip -l "$APK_PATH" | grep -cE "classes[0-9]*\.dex" || true)
+          RES_COUNT=$(unzip -l "$APK_PATH" | grep -c "resources\.arsc" || true)
+          echo "Manifest entries: $MANIFEST_COUNT | DEX entries: $DEX_COUNT | resources.arsc: $RES_COUNT"
+          if [ "$MANIFEST_COUNT" -lt 1 ] || [ "$DEX_COUNT" -lt 1 ] || [ "$RES_COUNT" -lt 1 ]; then
+            echo "ERROR: Missing core APK component (Manifest/DEX/resources.arsc)."
+            exit 1
           fi
 
-          echo "Verified installable debug APK at android-native/$APK_PATH" >> "$GITHUB_STEP_SUMMARY"
+          echo "=== 2. Native ABIs Packaged ==="
+          unzip -l "$APK_PATH" | grep "lib/" || echo "No native .so libs (pure DEX/bytecode compatible with all ABIs)"
+
+          echo "=== 3. Zipalign Verification ==="
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c 4 "$APK_PATH"
+
+          echo "=== 4. apksigner Verify (v1 + v2 + v3) ==="
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
+            --min-sdk-version 23 \
+            --verbose \
+            --print-certs \
+            "$APK_PATH"
+
+          echo "=== 5. AAPT2 Manifest, Package, SDK & Launchable Activity ==="
+          BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK_PATH")
+          echo "$BADGING" | grep -E "^(package:|sdkVersion:|targetSdkVersion:|application-label|launchable-activity:|native-code:)"
+
+          if echo "$BADGING" | grep -q "testOnly='-1'"; then
+            echo "ERROR: APK has testOnly flag which blocks standard phone installation!"
+            exit 1
+          fi
+
+          if ! echo "$BADGING" | grep -q "package: name='com.hatch.marketplace'"; then
+            echo "ERROR: Unexpected package name."
+            exit 1
+          fi
+
+          echo "Verified installable, signed, zipaligned HATCH APK at android-native/$APK_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload app-debug.apk Artifact
         uses: actions/upload-artifact@v4
