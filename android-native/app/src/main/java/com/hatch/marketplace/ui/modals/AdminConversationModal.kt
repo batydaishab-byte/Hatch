@@ -50,6 +50,7 @@ import com.hatch.marketplace.data.model.Conversation
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.ui.theme.HatchAmber400
+import com.hatch.marketplace.ui.theme.HatchAmber500
 import com.hatch.marketplace.ui.theme.HatchBgDark
 import com.hatch.marketplace.ui.theme.HatchBorderDark
 import com.hatch.marketplace.ui.theme.HatchCardElevated
