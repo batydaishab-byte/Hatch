@@ -9,16 +9,23 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.core.os.ConfigurationCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -60,6 +67,7 @@ import com.hatch.marketplace.ui.state.HatchMainViewModel
 import com.hatch.marketplace.ui.theme.HatchBgDark
 import com.hatch.marketplace.ui.theme.HatchTheme
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.Locale
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -80,12 +88,19 @@ fun HatchMarketplaceRoot(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val strings = remember(state.language) { HatchStrings.forLanguage(state.language) }
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val systemLangCode = ConfigurationCompat.getLocales(configuration)[0]?.language
+        ?: Locale.getDefault().language
+
+    LaunchedEffect(systemLangCode) {
+        viewModel.updateSystemLocale(systemLangCode)
+    }
 
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            runCatching {
+        if (result.data != null) {
+            try {
                 val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 val account = task.getResult(ApiException::class.java)
                 val idToken = account.idToken
@@ -94,13 +109,38 @@ fun HatchMarketplaceRoot(
                     viewModel.signInWithGoogleCredential(credential)
                 } else {
                     viewModel.showToast(
-                        if (state.language == AppLanguage.AR) "تعذر استلام رمز Google" else "Missing Google ID token",
+                        if (state.language == AppLanguage.AR) {
+                            "تعذر استلام رمز Google (تأكد من Web Client ID في google-services.json)"
+                        } else {
+                            "Missing Google ID token (check Web Client ID in google-services.json)"
+                        },
                         ToastType.ERROR
                     )
                 }
-            }.onFailure { e ->
+            } catch (e: ApiException) {
+                when (e.statusCode) {
+                    12501 -> { /* User cancelled account chooser */ }
+                    10 -> viewModel.showToast(
+                        if (state.language == AppLanguage.AR) {
+                            "خطأ إعداد Google Sign-In (رمز 10): أضف SHA-1 للتطبيق في Firebase Console"
+                        } else {
+                            "Google Sign-In config error (10): register app SHA-1 in Firebase Console"
+                        },
+                        ToastType.ERROR
+                    )
+                    else -> viewModel.showToast(
+                        e.localizedMessage ?: "Google Sign-In failed (${e.statusCode})",
+                        ToastType.ERROR
+                    )
+                }
+            } catch (e: Exception) {
                 viewModel.showToast(e.localizedMessage ?: "Google Sign-In failed", ToastType.ERROR)
             }
+        } else if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.showToast(
+                if (state.language == AppLanguage.AR) "تعذر قراءة استجابة Google Sign-In" else "Empty Google Sign-In result",
+                ToastType.ERROR
+            )
         }
     }
 
@@ -113,11 +153,11 @@ fun HatchMarketplaceRoot(
         if (webClientResId == 0) {
             viewModel.showToast(
                 if (state.language == AppLanguage.AR) {
-                    "تسجيل Google يتطلب google-services.json؛ يمكنك استخدام البريد الإلكتروني الآن."
+                    "إعداد Google Sign-In غير مكتمل: أضف google-services.json مع تفعيل Google في Firebase"
                 } else {
-                    "Google Sign-In requires google-services.json; please use Email sign-in."
+                    "Google Sign-In requires google-services.json with Firebase Google Auth enabled."
                 },
-                ToastType.INFO
+                ToastType.ERROR
             )
             return
         }
@@ -127,7 +167,10 @@ fun HatchMarketplaceRoot(
             .requestEmail()
             .build()
         val client = GoogleSignIn.getClient(context, gso)
-        googleSignInLauncher.launch(client.signInIntent)
+        // Always show the device Google account chooser instead of silently reusing a cached account
+        client.signOut().addOnCompleteListener {
+            googleSignInLauncher.launch(client.signInIntent)
+        }
     }
 
     HatchTheme(language = state.language) {
@@ -135,6 +178,8 @@ fun HatchMarketplaceRoot(
             SplashScreen(strings = strings)
             return@HatchTheme
         }
+
+        val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
         Box(modifier = Modifier.fillMaxSize()) {
             Scaffold(
@@ -163,26 +208,28 @@ fun HatchMarketplaceRoot(
                     }
                 },
                 bottomBar = {
-                    Column {
-                        AdMobBannerCard(
-                            ads = state.sponsoredAds,
-                            config = state.adConfig,
-                            language = state.language,
-                            strings = strings,
-                            onImpression = { viewModel.recordAdImpression(it) },
-                            onClickAd = { viewModel.recordAdClick(it.id) },
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                        )
-                        HatchBottomNav(
-                            strings = strings,
-                            activeTab = state.activeTab,
-                            unreadChatsCount = state.unreadChatsCount,
-                            favoritesCount = state.favoriteIds.size,
-                            isAdmin = state.isAdmin,
-                            adminAlertsCount = state.pendingReportsCount + state.flaggedProductsCount,
-                            onSelectTab = { viewModel.selectTab(it) },
-                            onSellClick = { viewModel.openSellModal() }
-                        )
+                    if (!isKeyboardOpen) {
+                        Column {
+                            AdMobBannerCard(
+                                ads = state.sponsoredAds,
+                                config = state.adConfig,
+                                language = state.language,
+                                strings = strings,
+                                onImpression = { viewModel.recordAdImpression(it) },
+                                onClickAd = { viewModel.recordAdClick(it.id) },
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            )
+                            HatchBottomNav(
+                                strings = strings,
+                                activeTab = state.activeTab,
+                                unreadChatsCount = state.unreadChatsCount,
+                                favoritesCount = state.favoriteIds.size,
+                                isAdmin = state.isAdmin,
+                                adminAlertsCount = state.pendingReportsCount + state.flaggedProductsCount,
+                                onSelectTab = { viewModel.selectTab(it) },
+                                onSellClick = { viewModel.openSellModal() }
+                            )
+                        }
                     }
                 }
             ) { innerPadding ->
@@ -190,10 +237,12 @@ fun HatchMarketplaceRoot(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
+                        .then(if (isKeyboardOpen) Modifier.windowInsetsPadding(WindowInsets.ime) else Modifier)
                 ) {
                     when (state.activeTab) {
                         MainTab.SWIPE -> SwipeDeckScreen(
                             products = state.swipeDeckProducts,
+                            favoriteIds = state.favoriteIds,
                             selectedCity = state.filter.selectedCity,
                             canUndo = state.passedProductIds.isNotEmpty(),
                             isRefreshing = state.isRefreshing,
@@ -201,10 +250,10 @@ fun HatchMarketplaceRoot(
                             strings = strings,
                             onSelectCity = { viewModel.selectCity(it) },
                             onRefresh = { viewModel.triggerPullToRefresh() },
-                            onSwipeLeft = { viewModel.swipeLeft(it) },
-                            onSwipeRight = { viewModel.swipeRight(it) },
+                            onBrowseNext = { viewModel.browseNextSwipeCard(it) },
+                            onBrowsePrevious = { viewModel.undoLastSwipe() },
                             onSwipeUpOffer = { viewModel.openOfferModal(it) },
-                            onUndo = { viewModel.undoLastSwipe() },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onOpenDetail = { viewModel.openProductDetail(it) },
                             onResetDeck = { viewModel.resetSwipeDeck() },
                             onGoToBrowse = { viewModel.selectTab(MainTab.BROWSE) }
@@ -413,18 +462,14 @@ fun HatchMarketplaceRoot(
             CreateAccountAuthSheet(
                 needsOnboarding = state.auth.firebaseUser != null && state.auth.needsProfileOnboarding,
                 defaultName = state.auth.firebaseUser?.displayName.orEmpty(),
-                defaultEmail = state.auth.firebaseUser?.email.orEmpty(),
+                defaultAvatar = state.auth.firebaseUser?.photoUrl?.toString().orEmpty(),
                 isSubmitting = state.isSubmitting,
                 language = state.language,
                 strings = strings,
                 onDismiss = { viewModel.closeAuthSheet() },
                 onGoogleSignInClick = { launchGoogleSignIn() },
-                onEmailSignIn = { email, pass -> viewModel.signInWithEmail(email, pass) },
-                onEmailSignUp = { email, pass, name, phone, city, avatar ->
-                    viewModel.signUpWithEmail(email, pass, name, phone, city, avatar)
-                },
-                onCompleteOnboarding = { name, phone, city, avatar ->
-                    viewModel.saveOnboardingProfile(name, phone, city, avatar)
+                onCompleteOnboarding = { name, phone, city, avatar, avatarUri ->
+                    viewModel.saveOnboardingProfile(name, phone, city, avatar, avatarUri)
                 }
             )
         }
@@ -436,7 +481,9 @@ fun HatchMarketplaceRoot(
                 isSubmitting = state.isSubmitting,
                 language = state.language,
                 onDismiss = { viewModel.closeEditProfile() },
-                onSave = { name, phone, city, avatar -> viewModel.updateProfile(name, phone, city, avatar) }
+                onSave = { name, phone, city, avatar, avatarUri ->
+                    viewModel.updateProfile(name, phone, city, avatar, avatarUri)
+                }
             )
         }
 

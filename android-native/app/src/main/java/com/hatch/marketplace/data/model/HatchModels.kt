@@ -505,7 +505,12 @@ object MarketplaceLogic {
         return products.filter { p ->
             if (activeOnly && p.status != ProductStatus.ACTIVE.wireValue) return@filter false
             if (filter.selectedCategory != "all" && p.category != filter.selectedCategory) return@filter false
-            if (filter.selectedCity != "all" && p.city != filter.selectedCity) return@filter false
+            if (filter.selectedCity != "all") {
+                val selBase = filter.selectedCity.substringBefore("(").replace(" ", "").trim()
+                val prodBase = p.city.substringBefore("(").replace(" ", "").trim()
+                val cityMatches = p.city == filter.selectedCity || (selBase.isNotEmpty() && selBase == prodBase)
+                if (!cityMatches) return@filter false
+            }
             if (filter.selectedCondition != "all" && p.condition != filter.selectedCondition) return@filter false
             if (p.price < filter.minPrice) return@filter false
             if (!filter.unlimitedPrice && p.price > filter.maxPrice) return@filter false

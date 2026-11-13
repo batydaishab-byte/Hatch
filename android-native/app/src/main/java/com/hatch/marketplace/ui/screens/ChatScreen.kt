@@ -21,9 +21,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -35,7 +37,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
@@ -80,7 +84,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -251,7 +257,9 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(messages.size) {
+    val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+
+    LaunchedEffect(messages.size, imeOpen) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.lastIndex)
         }
@@ -558,6 +566,13 @@ fun ChatScreen(
                     onValueChange = { inputText = it },
                     placeholder = { Text(strings.chatInputPlaceholder, color = HatchTextMuted, fontSize = 12.sp) },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (inputText.isNotBlank()) {
+                            onSendMessage(inputText)
+                            inputText = ""
+                        }
+                    }),
                     colors = hatchInputColors(),
                     shape = RoundedCornerShape(50),
                     modifier = Modifier.weight(1f)
@@ -584,12 +599,14 @@ fun ChatScreen(
             containerColor = HatchSurfaceDark,
             title = { Text(strings.counterOffer, color = HatchAmber400, fontWeight = FontWeight.Black) },
             text = {
-                HatchField(
-                    value = counterAmountText,
-                    onValueChange = { counterAmountText = it.filter { c -> c.isDigit() } },
-                    label = if (language == AppLanguage.AR) "السعر المضاد (ج.س)" else "Counter Price (SDG)",
-                    keyboardType = KeyboardType.Number
-                )
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    HatchField(
+                        value = counterAmountText,
+                        onValueChange = { counterAmountText = it.filter { c -> c.isDigit() } },
+                        label = if (language == AppLanguage.AR) "السعر المضاد (ج.س)" else "Counter Price (SDG)",
+                        keyboardType = KeyboardType.Number
+                    )
+                }
             },
             confirmButton = {
                 val amt = counterAmountText.toDoubleOrNull() ?: 0.0
@@ -671,7 +688,10 @@ private fun InspectionPhotoPickerDialog(
         containerColor = HatchSurfaceDark,
         title = { Text(strings.sendInspectionPhoto, color = HatchEmerald400, fontWeight = FontWeight.Black, fontSize = 16.sp) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text(if (language == AppLanguage.AR) "اختر تصنيف الفحص:" else "Select Inspection Tag:", color = HatchTextSecondary, fontSize = 11.sp)
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     strings.inspectionTags.forEach { tag ->

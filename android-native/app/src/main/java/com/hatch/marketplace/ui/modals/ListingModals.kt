@@ -15,14 +15,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -165,7 +169,10 @@ fun SellModal(
 
     val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
         Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
@@ -350,8 +357,8 @@ fun SellModal(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .navigationBarsPadding()
                         .background(HatchSurfaceDark)
+                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                         .padding(16.dp)
                 ) {
                     val priceVal = priceText.toDoubleOrNull() ?: 0.0
@@ -435,7 +442,10 @@ fun EditListingModal(
         mutableStateListOf<String>().apply { addAll(product.paymentMethods.ifEmpty { listOf("cash") }) }
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
         Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
@@ -485,7 +495,13 @@ fun EditListingModal(
                     HatchSwitchRow(strings.urgentBadge, urgentSale) { urgentSale = it }
                     HatchField(descriptionAr, { descriptionAr = it }, if (language == AppLanguage.AR) "الوصف" else "Description", singleLine = false, minLines = 3)
                 }
-                Box(modifier = Modifier.fillMaxWidth().navigationBarsPadding().background(HatchSurfaceDark).padding(16.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(HatchSurfaceDark)
+                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                        .padding(16.dp)
+                ) {
                     val priceVal = priceText.toDoubleOrNull() ?: 0.0
                     Button(
                         onClick = {
@@ -528,7 +544,10 @@ fun MakeOfferDialog(
         containerColor = HatchSurfaceDark,
         title = { Text(strings.makeOffer, color = HatchAmber400, fontWeight = FontWeight.Black) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text(
                     text = "${if (language == AppLanguage.AR) product.titleAr else product.titleEn} • ${HatchFormatters.formatSdg(product.price, language)}",
                     color = HatchTextSecondary,

@@ -44,5 +44,19 @@ class HatchStringsParityTest {
             assertTrue(ar.paymentLabel(pm.wireValue).isNotBlank())
             assertTrue(en.paymentLabel(pm.wireValue).isNotBlank())
         }
+
+        assertEquals("هتش", ar.navSwipe)
+        assertEquals("HATCH", en.navSwipe)
+        assertEquals("هتش", ar.appName)
+        assertEquals("HATCH", en.appName)
+
+        assertTrue(ar.signInGoogle.isNotBlank())
+        assertTrue(en.signInGoogle.isNotBlank())
+        assertTrue(ar.browseAsGuest.isNotBlank())
+        assertTrue(en.browseAsGuest.isNotBlank())
+        assertTrue(ar.saveAndContinue.isNotBlank())
+        assertTrue(en.saveAndContinue.isNotBlank())
+        assertTrue(!ar.signInSubtitle.contains("البريد الإلكتروني"))
+        assertTrue(!en.signInSubtitle.contains("Email"))
     }
 }

@@ -1,6 +1,11 @@
 package com.hatch.marketplace.ui.modals
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,23 +15,35 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Android
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Phone
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
@@ -45,6 +62,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -57,13 +75,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.hatch.marketplace.BuildConfig
 import com.hatch.marketplace.data.model.AppLanguage
@@ -86,43 +108,86 @@ import com.hatch.marketplace.ui.theme.HatchSurfaceDark
 import com.hatch.marketplace.ui.theme.HatchTextMuted
 import com.hatch.marketplace.ui.theme.HatchTextPrimary
 import com.hatch.marketplace.ui.theme.HatchTextSecondary
+import java.io.File
 
 private val AVATAR_PRESETS = listOf(
-    "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader1",
-    "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader2",
-    "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader3",
-    "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader4",
-    "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader5"
+    "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80",
+    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80",
+    "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=256&q=80",
+    "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=256&q=80",
+    "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80"
 )
+
+private fun extractLocalSudanDigits(raw: String): String {
+    var clean = raw.filter { it.isDigit() }
+    if (clean.startsWith("249")) clean = clean.drop(3)
+    if (clean.startsWith("0")) clean = clean.drop(1)
+    return clean.take(10)
+}
 
 @Composable
 fun CreateAccountAuthSheet(
     needsOnboarding: Boolean,
     defaultName: String,
-    defaultEmail: String,
+    defaultAvatar: String,
     isSubmitting: Boolean,
     language: AppLanguage,
     strings: HatchStrings,
     onDismiss: () -> Unit,
     onGoogleSignInClick: () -> Unit,
-    onEmailSignIn: (String, String) -> Unit,
-    onEmailSignUp: (email: String, pass: String, name: String, phone: String, city: String, avatar: String) -> Unit,
-    onCompleteOnboarding: (name: String, phone: String, city: String, avatar: String) -> Unit
+    onCompleteOnboarding: (name: String, phone: String, city: String, avatar: String, avatarUri: Uri?) -> Unit
 ) {
-    var isSignUpMode by remember { mutableStateOf(false) }
-    var email by remember { mutableStateOf(defaultEmail) }
-    var password by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val initialAvatar = remember(defaultAvatar) {
+        defaultAvatar.takeIf { it.startsWith("https://") } ?: AVATAR_PRESETS.first()
+    }
     var name by remember(defaultName) { mutableStateOf(defaultName) }
-    var phone by remember { mutableStateOf("+249") }
-    var city by remember { mutableStateOf(SudaneseCities.ALL.first()) }
-    var avatar by remember { mutableStateOf(AVATAR_PRESETS.first()) }
+    var phoneDigits by remember { mutableStateOf("") }
+    var city by remember { mutableStateOf(SudaneseCities.ALL.firstOrNull { it.contains("بورتسودان") } ?: SudaneseCities.ALL.first()) }
+    var avatar by remember(initialAvatar) { mutableStateOf(initialAvatar) }
+    var selectedAvatarUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingCamUri by remember { mutableStateOf<Uri?>(null) }
+    var validationError by remember { mutableStateOf<String?>(null) }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            selectedAvatarUri = uri
+            validationError = null
+        }
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) {
+            selectedAvatarUri = pendingCamUri
+            validationError = null
+        }
+    }
+
+    val launchCamera = {
+        val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+        val file = File(dir, "avatar_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        pendingCamUri = uri
+        cameraLauncher.launch(uri)
+    }
+
+    val camPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchCamera()
+        else validationError = if (language == AppLanguage.AR) "يرجى منح إذن الكاميرا لالتقاط صورة" else "Camera permission is required"
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
         Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
+                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
                     .verticalScroll(rememberScrollState())
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -145,96 +210,422 @@ fun CreateAccountAuthSheet(
                     }
                 }
 
-                Text(strings.signInSubtitle, color = HatchTextSecondary, fontSize = 13.sp)
+                Text(
+                    text = if (needsOnboarding) {
+                        if (language == AppLanguage.AR) "أكمل بياناتك للبدء في البيع والشراء على هتش" else "Complete your seller profile to trade on HATCH"
+                    } else {
+                        strings.signInSubtitle
+                    },
+                    color = HatchTextSecondary,
+                    fontSize = 13.sp
+                )
 
                 if (!needsOnboarding) {
-                    Button(
-                        onClick = onGoogleSignInClick,
-                        enabled = !isSubmitting,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(HatchSurfaceDark)
+                            .border(1.dp, HatchBorderDark, RoundedCornerShape(22.dp))
+                            .padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text(strings.signInGoogle, fontWeight = FontWeight.Black, fontSize = 14.sp)
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        SelectablePill(strings.signInEmail, !isSignUpMode) { isSignUpMode = false }
-                        SelectablePill(strings.signUpEmail, isSignUpMode) { isSignUpMode = true }
-                    }
-
-                    HatchField(email, { email = it }, if (language == AppLanguage.AR) "البريد الإلكتروني" else "Email Address", KeyboardType.Email)
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text(if (language == AppLanguage.AR) "كلمة المرور (6 أحرف فأكثر)" else "Password (min 6 chars)", color = HatchTextMuted, fontSize = 12.sp) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        colors = hatchInputColors(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                if (needsOnboarding || isSignUpMode) {
-                    Text(if (language == AppLanguage.AR) "اختر صورتك الشخصية" else "Pick Profile Avatar", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        AVATAR_PRESETS.forEach { preset ->
-                            AsyncImage(
-                                model = preset,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(CircleShape)
-                                    .border(if (avatar == preset) 2.5.dp else 1.dp, if (avatar == preset) HatchAmber500 else HatchBorderDark, CircleShape)
-                                    .clickable { avatar = preset }
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(HatchAmber500.copy(alpha = 0.14f))
+                                    .border(1.dp, HatchAmber500.copy(alpha = 0.35f), RoundedCornerShape(14.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Rounded.AccountCircle, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(24.dp))
+                            }
+                            Column {
+                                Text(
+                                    text = if (language == AppLanguage.AR) "دخول سريع وآمن عبر Google" else "Fast & Secure Google Sign-In",
+                                    color = HatchTextPrimary,
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = if (language == AppLanguage.AR) "اختر حساب Google الخاص بك من الجهاز للمتابعة" else "Choose your Google account on this device to continue",
+                                    color = HatchTextMuted,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = onGoogleSignInClick,
+                            enabled = !isSubmitting,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111)),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                        ) {
+                            if (isSubmitting) {
+                                CircularProgressIndicator(color = Color(0xFF111111), modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text(
+                                    text = "G",
+                                    color = Color(0xFF4285F4),
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 18.sp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(strings.signInGoogle, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(HatchBgDark)
+                                .border(1.dp, HatchBorderDark, RoundedCornerShape(14.dp))
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = if (language == AppLanguage.AR) {
+                                    "بعد اختيار حساب Google، ستكمل الاسم ورقم الهاتف السوداني والمدينة والصورة مرة واحدة فقط بدون رسائل SMS."
+                                } else {
+                                    "After picking your Google account, you will complete your name, Sudan phone, city, and avatar once without SMS fees."
+                                },
+                                color = HatchTextMuted,
+                                fontSize = 11.sp
                             )
                         }
                     }
 
-                    HatchField(name, { name = it }, if (language == AppLanguage.AR) "الاسم الكامل / اسم المتجر *" else "Display Name *")
-                    HatchField(phone, { phone = it }, if (language == AppLanguage.AR) "رقم الهاتف السوداني (+249) *" else "Sudan Phone (+249) *", KeyboardType.Phone)
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(strings.browseAsGuest, color = HatchTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                } else {
+                    if (!validationError.isNullOrBlank()) {
+                        Text(
+                            text = validationError!!,
+                            color = HatchRose500,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(HatchRose500.copy(alpha = 0.14f))
+                                .border(1.dp, HatchRose500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .padding(10.dp)
+                        )
+                    }
 
-                    Text(if (language == AppLanguage.AR) "المدينة" else "City", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    // Avatar Picker + Live Preview
+                    AvatarPickerSection(
+                        avatar = avatar,
+                        selectedAvatarUri = selectedAvatarUri,
+                        defaultGooglePhoto = defaultAvatar,
+                        signerReady = signerReady,
+                        language = language,
+                        onSelectPreset = { url ->
+                            avatar = url
+                            selectedAvatarUri = null
+                        },
+                        onPickGallery = { galleryLauncher.launch("image/*") },
+                        onCaptureCamera = {
+                            val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                            if (granted) launchCamera() else camPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        },
+                        onClearLocalPhoto = { selectedAvatarUri = null }
+                    )
+
+                    // Full Name
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = {
+                            name = it
+                            validationError = null
+                        },
+                        label = { Text(if (language == AppLanguage.AR) "الاسم الكامل / اسم المتجر *" else "Full Name *", color = HatchTextMuted, fontSize = 12.sp) },
+                        leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
+                        singleLine = true,
+                        colors = hatchInputColors(),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Sudan Phone with +249 Badge
+                    SudanPhoneInputRow(
+                        digits = phoneDigits,
+                        language = language,
+                        onDigitsChange = {
+                            phoneDigits = it
+                            validationError = null
+                        }
+                    )
+
+                    // City Selector
+                    Text(if (language == AppLanguage.AR) "المدينة / الولاية *" else "City / State *", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         SudaneseCities.ALL.forEach { c ->
                             SelectablePill(c.substringBefore(" ("), city == c) { city = c }
                         }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(HatchSurfaceDark)
+                            .border(1.dp, HatchBorderDark, RoundedCornerShape(14.dp))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = if (language == AppLanguage.AR) {
+                                "شارة التوثيق الذهبية تظهر تلقائياً بعد إتمام 10 صفقات بيع ناجحة وموثقة."
+                            } else {
+                                "The verified badge unlocks automatically after 10 trusted completed deals."
+                            },
+                            color = HatchTextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
 
-                Button(
-                    onClick = {
-                        val normalizedPhone = HatchFormatters.normalizeSudanPhone(phone)
-                        when {
-                            needsOnboarding -> onCompleteOnboarding(name, normalizedPhone, city, avatar)
-                            isSignUpMode -> onEmailSignUp(email, password, name, normalizedPhone, city, avatar)
-                            else -> onEmailSignIn(email, password)
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Button(
+                        onClick = {
+                            val cleanName = name.trim()
+                            if (cleanName.length < 2) {
+                                validationError = if (language == AppLanguage.AR) "يرجى كتابة الاسم الكامل (حرفين فأكثر)" else "Please enter your full name"
+                                return@Button
+                            }
+                            if (phoneDigits.length < 8) {
+                                validationError = if (language == AppLanguage.AR) "يرجى إدخال رقم هاتف سوداني صحيح (8-10 أرقام)" else "Please enter a valid Sudan phone number"
+                                return@Button
+                            }
+                            val normalizedPhone = HatchFormatters.normalizeSudanPhone(phoneDigits)
+                            onCompleteOnboarding(cleanName, normalizedPhone, city, avatar, selectedAvatarUri)
+                        },
+                        enabled = !isSubmitting,
+                        colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth().height(52.dp)
+                    ) {
+                        if (isSubmitting) {
+                            CircularProgressIndicator(color = HatchBgDark, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(strings.saveAndContinue, fontWeight = FontWeight.Black, fontSize = 15.sp)
                         }
-                    },
-                    enabled = !isSubmitting,
-                    colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth().height(50.dp)
-                ) {
-                    if (isSubmitting) {
-                        CircularProgressIndicator(color = HatchBgDark, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        val btnLabel = when {
-                            needsOnboarding -> strings.createAccountTitle
-                            isSignUpMode -> strings.signUpEmail
-                            else -> strings.signInEmail
-                        }
-                        Text(btnLabel, fontWeight = FontWeight.Black, fontSize = 15.sp)
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SudanPhoneInputRow(
+    digits: String,
+    language: AppLanguage,
+    onDigitsChange: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = if (language == AppLanguage.AR) "رقم الهاتف السوداني *" else "Sudan Phone Number *",
+            color = HatchTextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
+                    modifier = Modifier
+                        .height(56.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(HatchSurfaceDark)
+                        .border(1.dp, HatchBorderDark, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("🇸🇩", fontSize = 16.sp)
+                    Text(
+                        text = "+249",
+                        color = HatchAmber400,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp
+                    )
+                }
+
+                OutlinedTextField(
+                    value = digits,
+                    onValueChange = { input ->
+                        val cleaned = extractLocalSudanDigits(input)
+                        onDigitsChange(cleaned)
+                    },
+                    placeholder = { Text("912345678", color = HatchTextMuted, fontSize = 13.sp) },
+                    leadingIcon = { Icon(Icons.Rounded.Phone, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(17.dp)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    colors = hatchInputColors(),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Text(
+            text = if (language == AppLanguage.AR) "أدخل رقم الهاتف بدون +249 (مثال: 912345678) للتواصل المباشر عند المعاينة" else "Enter digits after +249 (e.g. 912345678) for deal contact",
+            color = HatchTextMuted,
+            fontSize = 10.sp
+        )
+    }
+}
+
+@Composable
+private fun AvatarPickerSection(
+    avatar: String,
+    selectedAvatarUri: Uri?,
+    defaultGooglePhoto: String,
+    signerReady: Boolean,
+    language: AppLanguage,
+    onSelectPreset: (String) -> Unit,
+    onPickGallery: () -> Unit,
+    onCaptureCamera: () -> Unit,
+    onClearLocalPhoto: () -> Unit
+) {
+    val activePreviewModel: Any = selectedAvatarUri ?: avatar
+    val presetChoices = remember(defaultGooglePhoto) {
+        if (defaultGooglePhoto.startsWith("https://") && !AVATAR_PRESETS.contains(defaultGooglePhoto)) {
+            listOf(defaultGooglePhoto) + AVATAR_PRESETS
+        } else {
+            AVATAR_PRESETS
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = if (language == AppLanguage.AR) "صورة الملف الشخصي" else "Profile Photo",
+            color = HatchTextSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(modifier = Modifier.size(62.dp)) {
+                AsyncImage(
+                    model = activePreviewModel,
+                    contentDescription = "Selected Avatar",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .border(2.5.dp, HatchAmber500, CircleShape)
+                )
+                if (selectedAvatarUri != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(HatchRose500)
+                            .clickable { onClearLocalPhoto() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Clear", tint = Color.White, modifier = Modifier.size(12.dp))
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                presetChoices.forEach { preset ->
+                    val isSelected = selectedAvatarUri == null && avatar == preset
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(CircleShape)
+                            .border(
+                                width = if (isSelected) 2.5.dp else 1.dp,
+                                color = if (isSelected) HatchAmber400 else HatchBorderDark,
+                                shape = CircleShape
+                            )
+                            .clickable { onSelectPreset(preset) }
+                    ) {
+                        AsyncImage(
+                            model = preset,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        if (isSelected) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(HatchAmber500.copy(alpha = 0.25f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onCaptureCamera,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.CameraAlt, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(if (language == AppLanguage.AR) "التقاط صورة" else "Camera", color = HatchEmerald400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(
+                onClick = onPickGallery,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(15.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(if (language == AppLanguage.AR) "من المعرض" else "Gallery", color = HatchAmber400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (selectedAvatarUri != null && !signerReady) {
+            Text(
+                text = if (language == AppLanguage.AR) {
+                    "تنبيه: رفع صورة من الجهاز يتطلب تفعيل MEDIA_SIGNER_URL السحابي؛ يمكنك اختيار إحدى الصور الجاهزة أو صورة Google."
+                } else {
+                    "Note: Device photo upload requires MEDIA_SIGNER_URL; select a preset or Google photo to save now."
+                },
+                color = HatchAmber400,
+                fontSize = 10.sp
+            )
         }
     }
 }
@@ -246,34 +637,70 @@ fun EditProfileDialog(
     isSubmitting: Boolean,
     language: AppLanguage,
     onDismiss: () -> Unit,
-    onSave: (name: String, phone: String, city: String, avatar: String) -> Unit
+    onSave: (name: String, phone: String, city: String, avatar: String, avatarUri: Uri?) -> Unit
 ) {
+    val context = LocalContext.current
     var name by remember(user.uid) { mutableStateOf(user.name) }
-    var phone by remember(user.uid) { mutableStateOf(currentPhone.ifBlank { "+249" }) }
+    var phoneDigits by remember(user.uid) { mutableStateOf(extractLocalSudanDigits(currentPhone)) }
     var city by remember(user.uid) { mutableStateOf(user.city.ifBlank { SudaneseCities.ALL.first() }) }
     var avatar by remember(user.uid) { mutableStateOf(user.avatar.ifBlank { AVATAR_PRESETS.first() }) }
+    var selectedAvatarUri by remember(user.uid) { mutableStateOf<Uri?>(null) }
+    var pendingCamUri by remember { mutableStateOf<Uri?>(null) }
+
+    val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
+
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) selectedAvatarUri = uri
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) selectedAvatarUri = pendingCamUri
+    }
+
+    val launchCamera = {
+        val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+        val file = File(dir, "avatar_edit_${System.currentTimeMillis()}.jpg")
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        pendingCamUri = uri
+        cameraLauncher.launch(uri)
+    }
+
+    val camPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) launchCamera()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = HatchSurfaceDark,
         title = { Text(if (language == AppLanguage.AR) "تعديل الملف الشخصي" else "Edit Profile", color = HatchAmber400, fontWeight = FontWeight.Black) },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AVATAR_PRESETS.forEach { preset ->
-                        AsyncImage(
-                            model = preset,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(CircleShape)
-                                .border(if (avatar == preset) 2.dp else 1.dp, if (avatar == preset) HatchAmber500 else HatchBorderDark, CircleShape)
-                                .clickable { avatar = preset }
-                        )
-                    }
-                }
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                AvatarPickerSection(
+                    avatar = avatar,
+                    selectedAvatarUri = selectedAvatarUri,
+                    defaultGooglePhoto = user.avatar,
+                    signerReady = signerReady,
+                    language = language,
+                    onSelectPreset = { url ->
+                        avatar = url
+                        selectedAvatarUri = null
+                    },
+                    onPickGallery = { galleryLauncher.launch("image/*") },
+                    onCaptureCamera = {
+                        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                        if (granted) launchCamera() else camPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    },
+                    onClearLocalPhoto = { selectedAvatarUri = null }
+                )
                 HatchField(name, { name = it }, if (language == AppLanguage.AR) "الاسم" else "Name")
-                HatchField(phone, { phone = it }, if (language == AppLanguage.AR) "رقم الهاتف (+249)" else "Phone (+249)", KeyboardType.Phone)
+                SudanPhoneInputRow(
+                    digits = phoneDigits,
+                    language = language,
+                    onDigitsChange = { phoneDigits = it }
+                )
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SudaneseCities.ALL.forEach { c ->
                         SelectablePill(c.substringBefore(" ("), city == c) { city = c }
@@ -283,8 +710,8 @@ fun EditProfileDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onSave(name, HatchFormatters.normalizeSudanPhone(phone), city, avatar) },
-                enabled = !isSubmitting && name.trim().length >= 2,
+                onClick = { onSave(name, HatchFormatters.normalizeSudanPhone(phoneDigits), city, avatar, selectedAvatarUri) },
+                enabled = !isSubmitting && name.trim().length >= 2 && phoneDigits.length >= 8,
                 colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
             ) { Text(if (language == AppLanguage.AR) "حفظ" else "Save", fontWeight = FontWeight.Black) }
         },
@@ -312,7 +739,10 @@ fun UserRatingModal(
         containerColor = HatchSurfaceDark,
         title = { Text("${strings.rateSeller}: ${request.sellerName}", color = HatchAmber400, fontWeight = FontWeight.Black, fontSize = 16.sp) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     (1..5).forEach { idx ->
                         Icon(
@@ -549,7 +979,11 @@ fun NativeAppInfoDialog(language: AppLanguage, onDismiss: () -> Unit) {
         title = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Rounded.Android, contentDescription = null, tint = HatchEmerald400)
-                Text("HATCH Android Native", color = HatchAmber400, fontWeight = FontWeight.Black)
+                Text(
+                    text = if (language == AppLanguage.AR) "تطبيق هتش الأصلي (Android)" else "HATCH Android Native",
+                    color = HatchAmber400,
+                    fontWeight = FontWeight.Black
+                )
             }
         },
         text = {
@@ -583,7 +1017,12 @@ fun NativeAppInfoDialog(language: AppLanguage, onDismiss: () -> Unit) {
                             "تطبيق هتش للسوق السوداني الذكي:\nhttps://batydaishab-byte.github.io/Hatch/"
                         )
                     }
-                    context.startActivity(Intent.createChooser(shareIntent, "Share HATCH"))
+                    context.startActivity(
+                        Intent.createChooser(
+                            shareIntent,
+                            if (language == AppLanguage.AR) "مشاركة هتش" else "Share HATCH"
+                        )
+                    )
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
             ) {

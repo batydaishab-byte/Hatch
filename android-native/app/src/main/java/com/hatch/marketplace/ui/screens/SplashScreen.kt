@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hatch.marketplace.R
+import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
@@ -101,9 +102,9 @@ fun SplashScreen(strings: HatchStrings) {
             }
 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(text = "هَـتـْـش", color = HatchAmber400, fontSize = 32.sp, fontWeight = FontWeight.Black)
+                Text(text = strings.appName, color = HatchAmber400, fontSize = 32.sp, fontWeight = FontWeight.Black)
                 Text(
-                    text = "HATCH SUDAN",
+                    text = if (strings.language == AppLanguage.AR) "هتش السودان" else "HATCH SUDAN",
                     color = HatchAmber400,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,

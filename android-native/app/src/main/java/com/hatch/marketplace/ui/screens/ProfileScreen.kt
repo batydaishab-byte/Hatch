@@ -113,7 +113,7 @@ fun ProfileScreen(
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth().height(48.dp)
                 ) {
-                    Text(strings.signInEmail, fontWeight = FontWeight.Black)
+                    Text(strings.signInGoogle, fontWeight = FontWeight.Black)
                 }
             }
         }
@@ -180,7 +180,7 @@ fun ProfileScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
                     AsyncImage(
-                        model = publicUser.avatar.ifBlank { "https://api.dicebear.com/9.x/avataaars/png?seed=SudanTrader1" },
+                        model = publicUser.avatar.ifBlank { "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80" },
                         contentDescription = publicUser.name,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.size(56.dp).clip(CircleShape).border(2.dp, HatchAmber500, CircleShape)

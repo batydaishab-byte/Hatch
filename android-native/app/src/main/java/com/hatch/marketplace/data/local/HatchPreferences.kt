@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -29,10 +30,19 @@ class HatchPreferences @Inject constructor(
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
     }
 
-    val languageFlow: Flow<AppLanguage> = context.hatchDataStore.data.map { prefs ->
+    val languageOverrideFlow: Flow<AppLanguage?> = context.hatchDataStore.data.map { prefs ->
         when (prefs[Keys.LANGUAGE]) {
             AppLanguage.EN.code -> AppLanguage.EN
-            else -> AppLanguage.AR
+            AppLanguage.AR.code -> AppLanguage.AR
+            else -> null
+        }
+    }
+
+    val languageFlow: Flow<AppLanguage> = languageOverrideFlow.map { manual ->
+        manual ?: if (Locale.getDefault().language.equals("ar", ignoreCase = true)) {
+            AppLanguage.AR
+        } else {
+            AppLanguage.EN
         }
     }
 

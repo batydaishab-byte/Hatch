@@ -44,6 +44,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
@@ -169,6 +170,9 @@ class HatchMainViewModel @Inject constructor(
 
     private val _localState = MutableStateFlow(HatchUiState())
     private val _activeConversationId = MutableStateFlow<String?>(null)
+    private val _systemLanguage = MutableStateFlow(
+        if (Locale.getDefault().language.equals("ar", ignoreCase = true)) AppLanguage.AR else AppLanguage.EN
+    )
     private var productViewsBeforeAd = 0
 
     private val authSessionFlow = authRepo.observeAuthSession()
@@ -255,9 +259,16 @@ class HatchMainViewModel @Inject constructor(
         MetaStreams(notifs, reviews, reports, users, ads)
     }
 
+    private val effectiveLanguageFlow = combine(
+        prefs.languageOverrideFlow,
+        _systemLanguage
+    ) { manual, system ->
+        manual ?: system
+    }
+
     private val settingsCombined = combine(
         adConfigFlow,
-        prefs.languageFlow,
+        effectiveLanguageFlow,
         prefs.selectedCityFlow,
         prefs.searchHistoryFlow,
         networkMonitor.isOnlineFlow
@@ -341,6 +352,13 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
+    fun updateSystemLocale(languageCode: String) {
+        val next = if (languageCode.startsWith("ar", ignoreCase = true)) AppLanguage.AR else AppLanguage.EN
+        if (_systemLanguage.value != next) {
+            _systemLanguage.value = next
+        }
+    }
+
     fun toggleLanguage() {
         val next = if (uiState.value.language == AppLanguage.AR) AppLanguage.EN else AppLanguage.AR
         viewModelScope.launch { prefs.setLanguage(next) }
@@ -399,37 +417,26 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun signInWithEmail(email: String, password: String) {
-        viewModelScope.launch {
-            setSubmitting(true)
-            authRepo.signInWithEmailPassword(email, password)
-                .onSuccess {
-                    showToast(if (isArabic()) "مرحباً بعودتك في هتش!" else "Welcome back to HATCH!", ToastType.SUCCESS)
-                    _localState.update { it.copy(showAuthSheet = false) }
-                }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Sign-in failed", ToastType.ERROR) }
-            setSubmitting(false)
-        }
-    }
-
-    fun signUpWithEmail(email: String, password: String, name: String, phone: String, city: String, avatar: String) {
-        viewModelScope.launch {
-            setSubmitting(true)
-            authRepo.signUpWithEmailPassword(email, password, name, phone, city, avatar)
-                .onSuccess {
-                    showToast(if (isArabic()) "تم إنشاء حسابك في هتش بنجاح!" else "Your HATCH account is ready!", ToastType.SUCCESS)
-                    _localState.update { it.copy(showAuthSheet = false) }
-                }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Account creation failed", ToastType.ERROR) }
-            setSubmitting(false)
-        }
-    }
-
-    fun saveOnboardingProfile(name: String, phone: String, city: String, avatar: String) {
+    fun saveOnboardingProfile(
+        name: String,
+        phone: String,
+        city: String,
+        avatar: String,
+        avatarUri: Uri? = null
+    ) {
         val fbUser = uiState.value.auth.firebaseUser ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            authRepo.saveOnboardingProfile(fbUser.uid, fbUser.email.orEmpty(), name, phone, city, avatar)
+            val resolvedAvatar = if (avatarUri != null) {
+                productRepo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
+                    showToast(e.localizedMessage ?: "Avatar upload failed", ToastType.ERROR)
+                    setSubmitting(false)
+                    return@launch
+                }
+            } else {
+                avatar
+            }
+            authRepo.saveOnboardingProfile(fbUser.uid, fbUser.email.orEmpty(), name, phone, city, resolvedAvatar)
                 .onSuccess {
                     prefs.setOnboardingCompleted(true)
                     _localState.update { it.copy(showAuthSheet = false) }
@@ -440,11 +447,26 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun updateProfile(name: String, phone: String, city: String, avatar: String) {
+    fun updateProfile(
+        name: String,
+        phone: String,
+        city: String,
+        avatar: String,
+        avatarUri: Uri? = null
+    ) {
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            authRepo.updateProfile(uid, name, phone, city, avatar)
+            val resolvedAvatar = if (avatarUri != null) {
+                productRepo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
+                    showToast(e.localizedMessage ?: "Avatar upload failed", ToastType.ERROR)
+                    setSubmitting(false)
+                    return@launch
+                }
+            } else {
+                avatar
+            }
+            authRepo.updateProfile(uid, name, phone, city, resolvedAvatar)
                 .onSuccess {
                     _localState.update { it.copy(showEditProfileDialog = false) }
                     showToast(if (isArabic()) "تم تحديث البيانات" else "Profile updated", ToastType.SUCCESS)
@@ -482,6 +504,12 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun closeProductDetail() { _localState.update { it.copy(selectedProduct = null) } }
+
+    fun browseNextSwipeCard(product: Product) {
+        _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
+        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        viewModelScope.launch { interactionRepo.recordSwipe(uid, product.id, "right") }
+    }
 
     fun swipeLeft(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }

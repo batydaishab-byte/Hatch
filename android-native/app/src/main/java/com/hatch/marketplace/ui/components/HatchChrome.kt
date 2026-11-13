@@ -143,7 +143,7 @@ fun HatchHeader(
                 )
                 Column {
                     Text(
-                        text = if (language == AppLanguage.AR) "هَـتـْـش" else "HATCH",
+                        text = strings.appName,
                         color = HatchAmber400,
                         fontWeight = FontWeight.Black,
                         fontSize = 18.sp

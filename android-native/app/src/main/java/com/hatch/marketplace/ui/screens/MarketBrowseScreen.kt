@@ -27,7 +27,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
@@ -55,6 +57,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -79,6 +83,7 @@ import com.hatch.marketplace.ui.theme.HatchBorderDark
 import com.hatch.marketplace.ui.theme.HatchBorderSubtle
 import com.hatch.marketplace.ui.theme.HatchCardElevated
 import com.hatch.marketplace.ui.theme.HatchEmerald400
+import com.hatch.marketplace.ui.theme.HatchRose500
 import com.hatch.marketplace.ui.theme.HatchSurfaceDark
 import com.hatch.marketplace.ui.theme.HatchTextMuted
 import com.hatch.marketplace.ui.theme.HatchTextPrimary
@@ -134,7 +139,7 @@ fun MarketBrowseScreen(
                 ) {
                     Text(strings.guestBrowseBanner, color = HatchAmber400, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     Text(
-                        text = strings.signInEmail,
+                        text = strings.signInGoogle,
                         color = HatchBgDark,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Black,
@@ -394,9 +399,24 @@ fun MarketBrowseScreen(
                     )
                 }
 
-                FilterCheckboxRow(strings.onlyBankak, filter.onlyBankak) { v -> onUpdateFilter { it.copy(onlyBankak = v) } }
-                FilterCheckboxRow(strings.onlyUrgent, filter.onlyUrgent) { v -> onUpdateFilter { it.copy(onlyUrgent = v) } }
-                FilterCheckboxRow(strings.onlyNegotiable, filter.onlyNegotiable) { v -> onUpdateFilter { it.copy(onlyNegotiable = v) } }
+                FilterCheckboxRow(
+                    label = strings.onlyBankak,
+                    checked = filter.onlyBankak,
+                    icon = Icons.Rounded.CreditCard,
+                    iconTint = HatchEmerald400,
+                    labelColor = HatchEmerald400
+                ) { v -> onUpdateFilter { it.copy(onlyBankak = v) } }
+                FilterCheckboxRow(
+                    label = strings.onlyUrgent,
+                    checked = filter.onlyUrgent,
+                    icon = Icons.Rounded.LocalFireDepartment,
+                    iconTint = HatchRose500,
+                    labelColor = HatchRose500
+                ) { v -> onUpdateFilter { it.copy(onlyUrgent = v) } }
+                FilterCheckboxRow(
+                    label = strings.onlyNegotiable,
+                    checked = filter.onlyNegotiable
+                ) { v -> onUpdateFilter { it.copy(onlyNegotiable = v) } }
 
                 Button(
                     onClick = { showFilterSheet = false },
@@ -426,7 +446,14 @@ private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun FilterCheckboxRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun FilterCheckboxRow(
+    label: String,
+    checked: Boolean,
+    icon: ImageVector? = null,
+    iconTint: Color = HatchTextPrimary,
+    labelColor: Color = HatchTextPrimary,
+    onCheckedChange: (Boolean) -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -437,7 +464,21 @@ private fun FilterCheckboxRow(label: String, checked: Boolean, onCheckedChange: 
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = HatchTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Text(label, color = labelColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
         Checkbox(checked = checked, onCheckedChange = onCheckedChange, colors = CheckboxDefaults.colors(checkedColor = HatchAmber500, checkmarkColor = HatchBgDark))
     }
 }
