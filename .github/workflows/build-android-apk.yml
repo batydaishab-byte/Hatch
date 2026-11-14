@@ -67,6 +67,52 @@ jobs:
         run: |
           gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
 
+      - name: Extract APK Signing Certificate Fingerprints (SHA-1 & SHA-256)
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -s "$APK_PATH" ]; then
+            echo "ERROR: $APK_PATH was not generated or is empty."
+            exit 1
+          fi
+
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH")
+
+          echo "=========================================="
+          echo "apksigner verify --print-certs output:"
+          echo "=========================================="
+          echo "$CERT_OUTPUT"
+
+          SHA1_HEX=$(echo "$CERT_OUTPUT" | sed -n 's/.*SHA-1 digest: \([0-9a-fA-F]*\).*/\1/p' | head -n 1)
+          SHA256_HEX=$(echo "$CERT_OUTPUT" | sed -n 's/.*SHA-256 digest: \([0-9a-fA-F]*\).*/\1/p' | head -n 1)
+
+          if [ -z "$SHA1_HEX" ] || [ -z "$SHA256_HEX" ]; then
+            echo "ERROR: Failed to parse SHA-1 or SHA-256 digest from apksigner output."
+            exit 1
+          fi
+
+          format_colons() {
+            echo "$1" | tr '[:lower:]' '[:upper:]' | sed 's/../&:/g; s/:$//'
+          }
+
+          SHA1_FORMATTED=$(format_colons "$SHA1_HEX")
+          SHA256_FORMATTED=$(format_colons "$SHA256_HEX")
+
+          echo "=========================================="
+          echo "Package Name : com.hatch.marketplace"
+          echo "SHA-1        : $SHA1_FORMATTED"
+          echo "SHA-1 (hex)  : $SHA1_HEX"
+          echo "SHA-256      : $SHA256_FORMATTED"
+          echo "SHA-256 (hex): $SHA256_HEX"
+          echo "=========================================="
+
+          {
+            echo "### APK Signing Certificate Fingerprints"
+            echo "- **Package:** \`com.hatch.marketplace\`"
+            echo "- **SHA-1:** \`$SHA1_FORMATTED\`"
+            echo "- **SHA-256:** \`$SHA256_FORMATTED\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify APK Installability, Signature, DEX & Resources
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
