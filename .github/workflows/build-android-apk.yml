@@ -63,8 +63,65 @@ jobs:
           gradle-version: '8.9'
           gradle-home-cache-cleanup: true
 
-      - name: Run Unit Tests & Assemble Debug APK (android-native only)
+      - name: Prepare Persistent Android Signing Keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set +x
+          KEYSTORE_PATH="${RUNNER_TEMP}/hatch-signing.jks"
+          rm -f "$KEYSTORE_PATH"
+
+          MISSING=()
+          [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] && MISSING+=("ANDROID_KEYSTORE_BASE64")
+          [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ] && MISSING+=("ANDROID_KEYSTORE_PASSWORD")
+          [ -z "${ANDROID_KEY_ALIAS:-}" ] && MISSING+=("ANDROID_KEY_ALIAS")
+          [ -z "${ANDROID_KEY_PASSWORD:-}" ] && MISSING+=("ANDROID_KEY_PASSWORD")
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+              echo "Pull request check without repository signing secrets; persistent signing skipped for PR verification only."
+              echo "HATCH_REQUIRE_PERSISTENT_SIGNING=false" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "ERROR: Missing required GitHub Secrets for persistent APK signing: ${MISSING[*]}"
+            echo "Aborting build to avoid generating an APK signed with a mismatched temporary debug key."
+            exit 1
+          fi
+
+          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_PATH" 2>/dev/null; then
+            rm -f "$KEYSTORE_PATH"
+            echo "ERROR: Failed to decode ANDROID_KEYSTORE_BASE64."
+            exit 1
+          fi
+
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            rm -f "$KEYSTORE_PATH"
+            echo "ERROR: Decoded keystore file is empty."
+            exit 1
+          fi
+
+          chmod 600 "$KEYSTORE_PATH"
+
+          if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+            rm -f "$KEYSTORE_PATH"
+            echo "ERROR: Keystore validation failed. Verify ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, and ANDROID_KEY_ALIAS."
+            exit 1
+          fi
+
+          echo "HATCH_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "HATCH_REQUIRE_PERSISTENT_SIGNING=true" >> "$GITHUB_ENV"
+          echo "Persistent signing keystore ready in temporary runner directory."
+
+      - name: Run Unit Tests & Assemble Debug APK (android-native only)
+        env:
+          HATCH_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          HATCH_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          HATCH_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set +x
           gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
 
       - name: Extract APK Signing Certificate Fingerprints (SHA-1 & SHA-256)
@@ -77,11 +134,6 @@ jobs:
 
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK_PATH")
-
-          echo "=========================================="
-          echo "apksigner verify --print-certs output:"
-          echo "=========================================="
-          echo "$CERT_OUTPUT"
 
           SHA1_HEX=$(echo "$CERT_OUTPUT" | sed -n 's/.*SHA-1 digest: \([0-9a-fA-F]*\).*/\1/p' | head -n 1)
           SHA256_HEX=$(echo "$CERT_OUTPUT" | sed -n 's/.*SHA-256 digest: \([0-9a-fA-F]*\).*/\1/p' | head -n 1)
@@ -105,6 +157,21 @@ jobs:
           echo "SHA-256      : $SHA256_FORMATTED"
           echo "SHA-256 (hex): $SHA256_HEX"
           echo "=========================================="
+
+          EXPECTED_SHA1="18:65:F4:90:74:ED:11:C8:92:1B:05:75:C1:18:32:AB:36:47:DA:9C"
+          EXPECTED_SHA256="1B:44:72:02:5C:8F:53:1E:32:55:57:1B:CA:47:C7:84:61:99:92:B1:8E:7A:69:00:87:A3:DB:07:0C:80:D2:4D"
+
+          if [ "${HATCH_REQUIRE_PERSISTENT_SIGNING:-false}" = "true" ]; then
+            if [ "$SHA1_FORMATTED" != "$EXPECTED_SHA1" ] || [ "$SHA256_FORMATTED" != "$EXPECTED_SHA256" ]; then
+              echo "ERROR: APK signing fingerprints do NOT match the persistent HATCH signing key!"
+              echo "Expected SHA-1  : $EXPECTED_SHA1"
+              echo "Actual   SHA-1  : $SHA1_FORMATTED"
+              echo "Expected SHA-256: $EXPECTED_SHA256"
+              echo "Actual   SHA-256: $SHA256_FORMATTED"
+              exit 1
+            fi
+            echo "Verified: APK signing fingerprints match the persistent HATCH signing key."
+          fi
 
           {
             echo "### APK Signing Certificate Fingerprints"
@@ -144,7 +211,6 @@ jobs:
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify \
             --min-sdk-version 23 \
             --verbose \
-            --print-certs \
             "$APK_PATH"
 
           echo "=== 5. AAPT2 Manifest, Package, SDK & Launchable Activity ==="
@@ -164,9 +230,16 @@ jobs:
           echo "Verified installable, signed, zipaligned HATCH APK at android-native/$APK_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload app-debug.apk Artifact
+        if: success() && github.event_name != 'pull_request' && env.HATCH_REQUIRE_PERSISTENT_SIGNING == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: hatch-app-debug-apk
           path: android-native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Clean Up Temporary Signing Keystore
+        if: always()
+        run: |
+          rm -f "${RUNNER_TEMP}/hatch-signing.jks"
+          echo "Temporary signing keystore removed."

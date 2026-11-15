@@ -35,8 +35,35 @@ android {
         buildConfigField("String", "CLOUDINARY_CLOUD_NAME", "\"\"")
     }
 
+    val hatchKeystorePath = System.getenv("HATCH_KEYSTORE_PATH")?.trim().orEmpty()
+    val hatchKeystorePassword = System.getenv("HATCH_KEYSTORE_PASSWORD").orEmpty()
+    val hatchKeyAlias = System.getenv("HATCH_KEY_ALIAS")?.trim().orEmpty()
+    val hatchKeyPassword = System.getenv("HATCH_KEY_PASSWORD").orEmpty()
+    val requirePersistentSigning = System.getenv("HATCH_REQUIRE_PERSISTENT_SIGNING") == "true"
+
+    val hatchKeystoreFile = if (hatchKeystorePath.isNotEmpty()) file(hatchKeystorePath) else null
+    val hasPersistentSigning = hatchKeystoreFile != null &&
+        hatchKeystoreFile.isFile &&
+        hatchKeystorePassword.isNotEmpty() &&
+        hatchKeyAlias.isNotEmpty() &&
+        hatchKeyPassword.isNotEmpty()
+
+    if (requirePersistentSigning && !hasPersistentSigning) {
+        throw org.gradle.api.GradleException(
+            "Persistent Android signing keystore is required for this build, " +
+                "but HATCH_KEYSTORE_PATH / HATCH_KEYSTORE_PASSWORD / HATCH_KEY_ALIAS / HATCH_KEY_PASSWORD are missing or invalid."
+        )
+    }
+
     signingConfigs {
         getByName("debug") {
+            if (hasPersistentSigning) {
+                storeFile = hatchKeystoreFile
+                storePassword = hatchKeystorePassword
+                keyAlias = hatchKeyAlias
+                keyPassword = hatchKeyPassword
+                println("HATCH Android: Configured debug signing with persistent keystore from environment.")
+            }
             enableV1Signing = true
             enableV2Signing = true
         }
