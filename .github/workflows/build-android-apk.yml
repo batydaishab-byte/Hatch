@@ -72,6 +72,7 @@ jobs:
         run: |
           set +x
           KEYSTORE_PATH="${RUNNER_TEMP}/hatch-signing.jks"
+          export KEYSTORE_PATH
           rm -f "$KEYSTORE_PATH"
 
           MISSING=()
@@ -91,9 +92,65 @@ jobs:
             exit 1
           fi
 
-          if ! printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$KEYSTORE_PATH" 2>/dev/null; then
+          if ! python3 - <<'PY'
+          import base64
+          import binascii
+          import os
+          import re
+          import sys
+
+          raw = os.environ.get("ANDROID_KEYSTORE_BASE64", "")
+          keystore_path = os.environ["KEYSTORE_PATH"]
+
+          invisible_chars = (
+              "\ufeff\u200b\u200c\u200d\u200e\u200f"
+              "\u202a\u202b\u202c\u202d\u202e"
+              "\u2066\u2067\u2068\u2069\u00a0"
+          )
+          cleaned = re.sub(r"\s+", "", raw).translate({ord(c): None for c in invisible_chars})
+          if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ("'", '"'):
+              cleaned = cleaned[1:-1]
+          if ";base64," in cleaned[:80]:
+              cleaned = cleaned.split(";base64,", 1)[1]
+          cleaned = cleaned.replace("-", "+").replace("_", "/")
+
+          if not cleaned or not re.fullmatch(r"[A-Za-z0-9+/]+=*", cleaned):
+              print(
+                  f"ERROR: Failed to decode ANDROID_KEYSTORE_BASE64 (invalid Base64 format; cleaned_length={len(cleaned)}).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          rem = len(cleaned) % 4
+          if rem == 1:
+              print(
+                  f"ERROR: Failed to decode ANDROID_KEYSTORE_BASE64 (truncated Base64 length={len(cleaned)}, mod4=1).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          if rem in (2, 3):
+              cleaned += "=" * (4 - rem)
+
+          try:
+              decoded = base64.b64decode(cleaned, validate=True)
+          except binascii.Error as exc:
+              print(
+                  f"ERROR: Failed to decode ANDROID_KEYSTORE_BASE64 ({exc}; cleaned_length={len(cleaned)}).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          if not decoded:
+              print("ERROR: Decoded keystore file is empty.", file=sys.stderr)
+              sys.exit(1)
+
+          with open(keystore_path, "wb") as f:
+              f.write(decoded)
+
+          print(f"Decoded ANDROID_KEYSTORE_BASE64 successfully ({len(decoded)} bytes).")
+          PY
+          then
             rm -f "$KEYSTORE_PATH"
-            echo "ERROR: Failed to decode ANDROID_KEYSTORE_BASE64."
             exit 1
           fi
 
@@ -105,7 +162,8 @@ jobs:
 
           chmod 600 "$KEYSTORE_PATH"
 
-          if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+          CLEAN_ALIAS=$(printf '%s' "$ANDROID_KEY_ALIAS" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -alias "$CLEAN_ALIAS" >/dev/null 2>&1; then
             rm -f "$KEYSTORE_PATH"
             echo "ERROR: Keystore validation failed. Verify ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, and ANDROID_KEY_ALIAS."
             exit 1
