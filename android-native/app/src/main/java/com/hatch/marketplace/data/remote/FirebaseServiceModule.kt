@@ -45,24 +45,46 @@ object FirebaseServiceModule {
     ): FirebaseClientsHolder {
         val app = FirebaseApp.getApps(context).firstOrNull() ?: runCatching {
             FirebaseApp.initializeApp(context)
+        }.onFailure { e ->
+            android.util.Log.e("HatchAuthFlow", "FirebaseApp init failed: ${e.javaClass.simpleName}")
         }.getOrNull()
 
-        val auth = app?.let { runCatching { FirebaseAuth.getInstance(it) }.getOrNull() }
+        val auth = app?.let {
+            runCatching { FirebaseAuth.getInstance(it) }
+                .onFailure { e ->
+                    android.util.Log.e("HatchAuthFlow", "FirebaseAuth init failed: ${e.javaClass.simpleName}")
+                }
+                .getOrNull()
+        }
 
         val firestore = app?.let { firebaseApp ->
             runCatching {
                 val db = FirebaseFirestore.getInstance(firebaseApp, BuildConfig.FIRESTORE_DATABASE_ID)
-                val settings = FirebaseFirestoreSettings.Builder()
-                    .setLocalCacheSettings(
-                        PersistentCacheSettings.newBuilder()
-                            .setSizeBytes(40L * 1024L * 1024L) // 40 MB offline cache
-                            .build()
+                runCatching {
+                    val settings = FirebaseFirestoreSettings.Builder()
+                        .setLocalCacheSettings(
+                            PersistentCacheSettings.newBuilder()
+                                .setSizeBytes(40L * 1024L * 1024L) // 40 MB offline cache
+                                .build()
+                        )
+                        .build()
+                    db.firestoreSettings = settings
+                }.onFailure { settingsErr ->
+                    android.util.Log.w(
+                        "HatchAuthFlow",
+                        "Firestore settings skipped: ${settingsErr.javaClass.simpleName}"
                     )
-                    .build()
-                db.firestoreSettings = settings
+                }
                 db
+            }.onFailure { e ->
+                android.util.Log.e("HatchAuthFlow", "FirebaseFirestore init failed: ${e.javaClass.simpleName}")
             }.getOrNull()
         }
+
+        android.util.Log.d(
+            "HatchAuthFlow",
+            "Firebase clients ready: hasApp=${app != null}, hasAuth=${auth != null}, hasFirestore=${firestore != null}"
+        )
 
         return FirebaseClientsHolder(app = app, auth = auth, firestore = firestore)
     }

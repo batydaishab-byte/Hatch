@@ -100,6 +100,8 @@ data class HatchUiState(
     val adminAuditConversation: Conversation? = null,
     val showSellModal: Boolean = false,
     val showAuthSheet: Boolean = false,
+    val forceOnboardingStep: Boolean = false,
+    val authErrorMessage: String? = null,
     val showEditProfileDialog: Boolean = false,
     val showNotificationsModal: Boolean = false,
     val showSafetyGuideModal: Boolean = false,
@@ -113,6 +115,9 @@ data class HatchUiState(
 
     val isSignedIn: Boolean
         get() = auth.firebaseUser != null
+
+    val isOnboardingRequired: Boolean
+        get() = auth.firebaseUser != null && (auth.needsProfileOnboarding || forceOnboardingStep)
 
     val isAdmin: Boolean
         get() = auth.isAdmin
@@ -308,7 +313,7 @@ class HatchMainViewModel @Inject constructor(
             adConfig = settings.adConfig,
             filter = local.filter.copy(selectedCity = settings.selectedCity),
             searchHistory = settings.searchHistory,
-            showAuthSheet = local.showAuthSheet || (core.auth.firebaseUser != null && core.auth.needsProfileOnboarding)
+            showAuthSheet = local.showAuthSheet || (core.auth.firebaseUser != null && (core.auth.needsProfileOnboarding || local.forceOnboardingStep))
         )
     }.stateIn(
         scope = viewModelScope,
@@ -394,25 +399,66 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun openAuthSheet() { _localState.update { it.copy(showAuthSheet = true) } }
+    fun openAuthSheet() {
+        _localState.update { it.copy(showAuthSheet = true, authErrorMessage = null) }
+    }
 
     fun closeAuthSheet() {
-        if (uiState.value.auth.firebaseUser != null && uiState.value.auth.needsProfileOnboarding) return
-        _localState.update { it.copy(showAuthSheet = false) }
+        if (uiState.value.isOnboardingRequired) return
+        _localState.update { it.copy(showAuthSheet = false, authErrorMessage = null) }
+    }
+
+    fun reportAuthError(message: String) {
+        android.util.Log.w("HatchAuthFlow", "Auth UI error reported")
+        _localState.update { it.copy(authErrorMessage = message) }
+        showToast(message, ToastType.ERROR)
+    }
+
+    fun clearAuthError() {
+        _localState.update { it.copy(authErrorMessage = null) }
     }
 
     fun signInWithGoogleCredential(credential: AuthCredential) {
         viewModelScope.launch {
             setSubmitting(true)
-            authRepo.signInWithCredential(credential)
-                .onSuccess {
-                    showToast(
-                        if (isArabic()) "تم تسجيل الدخول بحساب Google بنجاح" else "Signed in with Google",
-                        ToastType.SUCCESS
-                    )
-                    _localState.update { it.copy(showAuthSheet = false) }
+            clearAuthError()
+            authRepo.signInWithGoogleAndCheckProfile(credential)
+                .onSuccess { outcome ->
+                    if (outcome.needsOnboarding) {
+                        android.util.Log.d("HatchAuthFlow", "Routing authenticated Google user to onboarding profile form")
+                        _localState.update {
+                            it.copy(
+                                showAuthSheet = true,
+                                forceOnboardingStep = true,
+                                authErrorMessage = null
+                            )
+                        }
+                        showToast(
+                            if (isArabic()) "تم تسجيل الدخول — أكمل ملفك الشخصي للمتابعة" else "Signed in — complete your profile to continue",
+                            ToastType.INFO
+                        )
+                    } else {
+                        android.util.Log.d("HatchAuthFlow", "Existing user profile complete — navigating to Home")
+                        prefs.setOnboardingCompleted(true)
+                        _localState.update {
+                            it.copy(
+                                forceOnboardingStep = false,
+                                showAuthSheet = false,
+                                authErrorMessage = null,
+                                activeTab = MainTab.SWIPE
+                            )
+                        }
+                        showToast(
+                            if (isArabic()) "مرحباً بعودتك! تم تسجيل الدخول بنجاح" else "Welcome back! Signed in successfully",
+                            ToastType.SUCCESS
+                        )
+                    }
                 }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Google Sign-In failed", ToastType.ERROR) }
+                .onFailure { e ->
+                    val errText = e.localizedMessage ?: if (isArabic()) "فشل تسجيل الدخول عبر Google" else "Google Sign-In failed"
+                    android.util.Log.e("HatchAuthFlow", "signInWithGoogleCredential failed: ${e.javaClass.simpleName}")
+                    reportAuthError(errText)
+                }
             setSubmitting(false)
         }
     }
@@ -424,12 +470,21 @@ class HatchMainViewModel @Inject constructor(
         avatar: String,
         avatarUri: Uri? = null
     ) {
-        val fbUser = uiState.value.auth.firebaseUser ?: return
+        val fbUser = uiState.value.auth.firebaseUser ?: authRepo.currentFirebaseUser()
+        if (fbUser == null) {
+            val msg = if (isArabic()) "انتهت جلسة تسجيل الدخول، يرجى تسجيل الدخول مرة أخرى" else "Auth session lost, please sign in again"
+            android.util.Log.w("HatchAuthFlow", "saveOnboardingProfile aborted: no active FirebaseUser")
+            _localState.update { it.copy(forceOnboardingStep = false, authErrorMessage = msg) }
+            showToast(msg, ToastType.ERROR)
+            return
+        }
         viewModelScope.launch {
             setSubmitting(true)
+            clearAuthError()
             val resolvedAvatar = if (avatarUri != null) {
                 productRepo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
-                    showToast(e.localizedMessage ?: "Avatar upload failed", ToastType.ERROR)
+                    val msg = e.localizedMessage ?: if (isArabic()) "فشل رفع الصورة" else "Avatar upload failed"
+                    reportAuthError(msg)
                     setSubmitting(false)
                     return@launch
                 }
@@ -438,11 +493,23 @@ class HatchMainViewModel @Inject constructor(
             }
             authRepo.saveOnboardingProfile(fbUser.uid, fbUser.email.orEmpty(), name, phone, city, resolvedAvatar)
                 .onSuccess {
+                    android.util.Log.d("HatchAuthFlow", "Onboarding profile saved — navigating to Home")
                     prefs.setOnboardingCompleted(true)
-                    _localState.update { it.copy(showAuthSheet = false) }
+                    _localState.update {
+                        it.copy(
+                            forceOnboardingStep = false,
+                            showAuthSheet = false,
+                            authErrorMessage = null,
+                            activeTab = MainTab.SWIPE
+                        )
+                    }
                     showToast(if (isArabic()) "تم حفظ ملفك التجاري بنجاح" else "Profile saved", ToastType.SUCCESS)
                 }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Profile save failed", ToastType.ERROR) }
+                .onFailure { e ->
+                    val msg = e.localizedMessage ?: if (isArabic()) "تعذر حفظ البيانات" else "Profile save failed"
+                    android.util.Log.e("HatchAuthFlow", "saveOnboardingProfile failed: ${e.javaClass.simpleName}")
+                    reportAuthError(msg)
+                }
             setSubmitting(false)
         }
     }
@@ -480,7 +547,13 @@ class HatchMainViewModel @Inject constructor(
         authRepo.signOut()
         _activeConversationId.value = null
         _localState.update {
-            it.copy(activeTab = MainTab.SWIPE, activeConversationId = null, showEditProfileDialog = false)
+            it.copy(
+                activeTab = MainTab.SWIPE,
+                activeConversationId = null,
+                showEditProfileDialog = false,
+                forceOnboardingStep = false,
+                authErrorMessage = null
+            )
         }
         showToast(if (isArabic()) "تم تسجيل الخروج" else "Signed out", ToastType.INFO)
     }

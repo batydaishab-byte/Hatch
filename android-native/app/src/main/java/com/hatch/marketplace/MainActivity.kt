@@ -2,6 +2,7 @@ package com.hatch.marketplace
 
 import android.app.Activity
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -99,69 +100,111 @@ fun HatchMarketplaceRoot(
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        Log.d(
+            "HatchAuthFlow",
+            "GoogleSignIn ActivityResult resultCode=${result.resultCode}, hasData=${result.data != null}"
+        )
         if (result.data != null) {
             try {
                 val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 val account = task.getResult(ApiException::class.java)
                 val idToken = account.idToken
+                Log.d("HatchAuthFlow", "GoogleSignIn account received: hasIdToken=${!idToken.isNullOrBlank()}")
                 if (!idToken.isNullOrBlank()) {
+                    viewModel.clearAuthError()
                     val credential = GoogleAuthProvider.getCredential(idToken, null)
                     viewModel.signInWithGoogleCredential(credential)
                 } else {
-                    viewModel.showToast(
+                    Log.w("HatchAuthFlow", "GoogleSignIn missing idToken (check default_web_client_id / SHA-1)")
+                    viewModel.reportAuthError(
                         if (state.language == AppLanguage.AR) {
-                            "تعذر استلام رمز Google (تأكد من Web Client ID في google-services.json)"
+                            "تعذر استلام رمز Google (تأكد من Web Client ID وبصمة SHA-1 في Firebase)"
                         } else {
-                            "Missing Google ID token (check Web Client ID in google-services.json)"
-                        },
-                        ToastType.ERROR
+                            "Missing Google ID token (check Web Client ID and SHA-1 in Firebase)"
+                        }
                     )
                 }
             } catch (e: ApiException) {
+                Log.w("HatchAuthFlow", "GoogleSignIn ApiException statusCode=${e.statusCode}")
                 when (e.statusCode) {
                     12501 -> { /* User cancelled account chooser */ }
-                    10 -> viewModel.showToast(
+                    12500 -> viewModel.reportAuthError(
                         if (state.language == AppLanguage.AR) {
-                            "خطأ إعداد Google Sign-In (رمز 10): أضف SHA-1 للتطبيق في Firebase Console"
+                            "تعذر إكمال الدخول عبر Google (رمز 12500): تأكد من إعداد OAuth وبصمة SHA-1 وتحديث خدمات Google Play"
+                        } else {
+                            "Google Sign-In failed (12500): check Firebase OAuth consent, SHA-1, and Google Play Services"
+                        }
+                    )
+                    7 -> viewModel.reportAuthError(
+                        if (state.language == AppLanguage.AR) {
+                            "تعذر الاتصال بخدمات Google. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+                        } else {
+                            "Network error during Google Sign-In. Please check your connection."
+                        }
+                    )
+                    10 -> viewModel.reportAuthError(
+                        if (state.language == AppLanguage.AR) {
+                            "خطأ إعداد Google Sign-In (رمز 10): تأكد من تسجيل بصمة SHA-1 للتطبيق في Firebase Console"
                         } else {
                             "Google Sign-In config error (10): register app SHA-1 in Firebase Console"
-                        },
-                        ToastType.ERROR
+                        }
                     )
-                    else -> viewModel.showToast(
-                        e.localizedMessage ?: "Google Sign-In failed (${e.statusCode})",
-                        ToastType.ERROR
+                    else -> viewModel.reportAuthError(
+                        if (state.language == AppLanguage.AR) {
+                            "فشل تسجيل الدخول عبر Google (رمز ${e.statusCode}). حاول مرة أخرى."
+                        } else {
+                            "Google Sign-In failed (${e.statusCode}). Please try again."
+                        }
                     )
                 }
             } catch (e: Exception) {
-                viewModel.showToast(e.localizedMessage ?: "Google Sign-In failed", ToastType.ERROR)
+                Log.e("HatchAuthFlow", "GoogleSignIn unexpected exception: ${e::class.java.simpleName}")
+                viewModel.reportAuthError(
+                    if (state.language == AppLanguage.AR) {
+                        "حدث خطأ غير متوقع أثناء تسجيل الدخول عبر Google."
+                    } else {
+                        "Unexpected error during Google Sign-In."
+                    }
+                )
             }
         } else if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.showToast(
-                if (state.language == AppLanguage.AR) "تعذر قراءة استجابة Google Sign-In" else "Empty Google Sign-In result",
-                ToastType.ERROR
+            Log.w("HatchAuthFlow", "GoogleSignIn returned RESULT_OK with null data")
+            viewModel.reportAuthError(
+                if (state.language == AppLanguage.AR) "تعذر قراءة استجابة Google Sign-In" else "Empty Google Sign-In result"
             )
         }
     }
 
     fun launchGoogleSignIn() {
+        viewModel.clearAuthError()
         val webClientResId = context.resources.getIdentifier(
             "default_web_client_id",
             "string",
             context.packageName
         )
+        Log.d("HatchAuthFlow", "launchGoogleSignIn: hasWebClientId=${webClientResId != 0}")
         if (webClientResId == 0) {
-            viewModel.showToast(
+            viewModel.reportAuthError(
                 if (state.language == AppLanguage.AR) {
                     "إعداد Google Sign-In غير مكتمل: أضف google-services.json مع تفعيل Google في Firebase"
                 } else {
                     "Google Sign-In requires google-services.json with Firebase Google Auth enabled."
-                },
-                ToastType.ERROR
+                }
             )
             return
         }
         val webClientId = context.getString(webClientResId)
+        if (webClientId.isBlank()) {
+            Log.w("HatchAuthFlow", "launchGoogleSignIn: default_web_client_id is blank")
+            viewModel.reportAuthError(
+                if (state.language == AppLanguage.AR) {
+                    "قيمة default_web_client_id فارغة في google-services.json"
+                } else {
+                    "default_web_client_id is blank in google-services.json"
+                }
+            )
+            return
+        }
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestIdToken(webClientId)
             .requestEmail()
@@ -169,7 +212,18 @@ fun HatchMarketplaceRoot(
         val client = GoogleSignIn.getClient(context, gso)
         // Always show the device Google account chooser instead of silently reusing a cached account
         client.signOut().addOnCompleteListener {
-            googleSignInLauncher.launch(client.signInIntent)
+            runCatching {
+                googleSignInLauncher.launch(client.signInIntent)
+            }.onFailure { err ->
+                Log.e("HatchAuthFlow", "Failed to launch Google Sign-In intent: ${err::class.java.simpleName}")
+                viewModel.reportAuthError(
+                    if (state.language == AppLanguage.AR) {
+                        "تعذر فتح نافذة اختيار حساب Google على هذا الجهاز."
+                    } else {
+                        "Unable to open Google account chooser on this device."
+                    }
+                )
+            }
         }
     }
 
@@ -460,12 +514,14 @@ fun HatchMarketplaceRoot(
 
         if (state.showAuthSheet) {
             CreateAccountAuthSheet(
-                needsOnboarding = state.auth.firebaseUser != null && state.auth.needsProfileOnboarding,
+                needsOnboarding = state.isOnboardingRequired,
                 defaultName = state.auth.firebaseUser?.displayName.orEmpty(),
                 defaultAvatar = state.auth.firebaseUser?.photoUrl?.toString().orEmpty(),
                 isSubmitting = state.isSubmitting,
                 language = state.language,
                 strings = strings,
+                authErrorMessage = state.authErrorMessage,
+                onClearAuthError = { viewModel.clearAuthError() },
                 onDismiss = { viewModel.closeAuthSheet() },
                 onGoogleSignInClick = { launchGoogleSignIn() },
                 onCompleteOnboarding = { name, phone, city, avatar, avatarUri ->

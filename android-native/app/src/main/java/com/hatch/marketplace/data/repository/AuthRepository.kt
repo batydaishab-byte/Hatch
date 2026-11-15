@@ -1,5 +1,6 @@
 package com.hatch.marketplace.data.repository
 
+import android.util.Log
 import com.google.firebase.auth.AuthCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -28,16 +29,24 @@ data class AuthSessionState(
     val isFirebaseConnected: Boolean = false
 )
 
+data class GoogleAuthOutcome(
+    val user: FirebaseUser,
+    val needsOnboarding: Boolean
+)
+
 @Singleton
 class AuthRepository @Inject constructor(
     private val clients: FirebaseClientsHolder
 ) {
     val isConfigured: Boolean get() = clients.isConfigured
 
+    fun currentFirebaseUser(): FirebaseUser? = clients.auth?.currentUser
+
     fun observeAuthSession(): Flow<AuthSessionState> = callbackFlow {
         val auth = clients.auth
         val db = clients.firestore
-        if (auth == null || db == null) {
+        if (auth == null) {
+            Log.w("HatchAuthFlow", "observeAuthSession aborted: FirebaseAuth is null")
             trySend(AuthSessionState())
             close()
             return@callbackFlow
@@ -54,14 +63,18 @@ class AuthRepository @Inject constructor(
 
         fun emitState(user: FirebaseUser?) {
             if (user == null) {
-                trySend(AuthSessionState(isFirebaseConnected = true))
+                trySend(AuthSessionState(isFirebaseConnected = db != null))
                 return
             }
             val verifiedEmail = user.isEmailVerified &&
                 user.email?.trim()?.equals("batydaishab@gmail.com", ignoreCase = true) == true
             val isAdmin = hasAdminDoc || verifiedEmail ||
                 MarketplaceLogic.isAdminRole(currentPrivate?.role, if (user.isEmailVerified) user.email else null)
-            val needsOnboarding = publicLoaded && (currentPublic == null || currentPublic?.city.isNullOrBlank())
+            val needsOnboarding = publicLoaded && (
+                currentPublic == null ||
+                    currentPublic?.name.isNullOrBlank() ||
+                    currentPublic?.city.isNullOrBlank()
+                )
             trySend(
                 AuthSessionState(
                     firebaseUser = user,
@@ -70,7 +83,7 @@ class AuthRepository @Inject constructor(
                     isAdmin = isAdmin,
                     isVerifiedAdminEmail = verifiedEmail,
                     needsProfileOnboarding = needsOnboarding,
-                    isFirebaseConnected = true
+                    isFirebaseConnected = db != null
                 )
             )
         }
@@ -85,6 +98,10 @@ class AuthRepository @Inject constructor(
             publicLoaded = false
 
             val user = firebaseAuth.currentUser
+            Log.d(
+                "HatchAuthFlow",
+                "AuthStateListener fired: signedIn=${user != null}, isAnonymous=${user?.isAnonymous == true}, hasFirestore=${db != null}"
+            )
             if (user == null) {
                 emitState(null)
                 return@AuthStateListener
@@ -92,21 +109,46 @@ class AuthRepository @Inject constructor(
 
             emitState(user)
 
+            if (db == null) {
+                Log.e("HatchAuthFlow", "Firestore unavailable during auth session observation")
+                return@AuthStateListener
+            }
+
             publicReg = db.collection("users_public").document(user.uid)
-                .addSnapshotListener { snap, _ ->
+                .addSnapshotListener { snap, err ->
+                    if (err != null) {
+                        Log.e("HatchAuthFlow", "users_public listener error: code=${err.code}")
+                        return@addSnapshotListener
+                    }
                     publicLoaded = true
-                    currentPublic = snap?.toObject(PublicUser::class.java)?.copy(uid = snap.id)
+                    currentPublic = snap?.takeIf { it.exists() }
+                        ?.toObject(PublicUser::class.java)
+                        ?.copy(uid = snap.id)
+                    Log.d(
+                        "HatchAuthFlow",
+                        "users_public snapshot: exists=${snap?.exists() == true}, fromCache=${snap?.metadata?.isFromCache == true}, hasCity=${!currentPublic?.city.isNullOrBlank()}"
+                    )
                     emitState(user)
                 }
 
             privateReg = db.collection("users_private").document(user.uid)
-                .addSnapshotListener { snap, _ ->
-                    currentPrivate = snap?.toObject(PrivateUser::class.java)?.copy(uid = snap.id)
+                .addSnapshotListener { snap, err ->
+                    if (err != null) {
+                        Log.w("HatchAuthFlow", "users_private listener error: code=${err.code}")
+                        return@addSnapshotListener
+                    }
+                    currentPrivate = snap?.takeIf { it.exists() }
+                        ?.toObject(PrivateUser::class.java)
+                        ?.copy(uid = snap.id)
                     emitState(user)
                 }
 
             adminReg = db.collection("admins").document(user.uid)
-                .addSnapshotListener { snap, _ ->
+                .addSnapshotListener { snap, err ->
+                    if (err != null) {
+                        Log.w("HatchAuthFlow", "admins listener error: code=${err.code}")
+                        return@addSnapshotListener
+                    }
                     hasAdminDoc = snap != null && snap.exists()
                     emitState(user)
                 }
@@ -134,7 +176,40 @@ class AuthRepository @Inject constructor(
     suspend fun signInWithCredential(credential: AuthCredential): Result<FirebaseUser> = runCatching {
         val auth = clients.auth ?: error("Firebase Auth unavailable")
         val res = auth.signInWithCredential(credential).await()
-        res.user ?: error("Google Sign-In returned empty user")
+        val user = res.user ?: auth.currentUser ?: error("Google Sign-In returned empty user")
+        Log.d("HatchAuthFlow", "Firebase signInWithCredential success: isNewUser=${res.additionalUserInfo?.isNewUser}")
+        user
+    }.onFailure { e ->
+        Log.e("HatchAuthFlow", "Firebase signInWithCredential failed: ${e.javaClass.simpleName}")
+    }
+
+    suspend fun signInWithGoogleAndCheckProfile(credential: AuthCredential): Result<GoogleAuthOutcome> = runCatching {
+        val user = signInWithCredential(credential).getOrThrow()
+        val auth = clients.auth ?: error("Firebase Auth unavailable")
+        val activeUser = auth.currentUser ?: user
+        val db = clients.firestore ?: error("Firestore unavailable")
+
+        val publicRef = db.collection("users_public").document(activeUser.uid)
+        val snap = try {
+            publicRef.get(Source.SERVER).await()
+        } catch (serverErr: Exception) {
+            Log.w(
+                "HatchAuthFlow",
+                "Server profile lookup fallback to default source: ${serverErr.javaClass.simpleName}"
+            )
+            publicRef.get().await()
+        }
+
+        val name = snap.getString("name").orEmpty()
+        val city = snap.getString("city").orEmpty()
+        val needsOnboarding = !snap.exists() || name.isBlank() || city.isBlank()
+        Log.d(
+            "HatchAuthFlow",
+            "Post-Google profile check: docExists=${snap.exists()}, hasName=${name.isNotBlank()}, hasCity=${city.isNotBlank()}, needsOnboarding=$needsOnboarding"
+        )
+        GoogleAuthOutcome(user = activeUser, needsOnboarding = needsOnboarding)
+    }.onFailure { e ->
+        Log.e("HatchAuthFlow", "signInWithGoogleAndCheckProfile failed: ${e.javaClass.simpleName}")
     }
 
     suspend fun signInWithEmailPassword(email: String, password: String): Result<FirebaseUser> = runCatching {

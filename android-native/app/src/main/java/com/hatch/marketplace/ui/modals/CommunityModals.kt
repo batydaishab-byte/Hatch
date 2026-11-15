@@ -63,6 +63,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -133,6 +134,8 @@ fun CreateAccountAuthSheet(
     isSubmitting: Boolean,
     language: AppLanguage,
     strings: HatchStrings,
+    authErrorMessage: String? = null,
+    onClearAuthError: () -> Unit = {},
     onDismiss: () -> Unit,
     onGoogleSignInClick: () -> Unit,
     onCompleteOnboarding: (name: String, phone: String, city: String, avatar: String, avatarUri: Uri?) -> Unit
@@ -149,12 +152,17 @@ fun CreateAccountAuthSheet(
     var pendingCamUri by remember { mutableStateOf<Uri?>(null) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
+    LaunchedEffect(needsOnboarding) {
+        validationError = null
+    }
+
     val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
 
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             selectedAvatarUri = uri
             validationError = null
+            onClearAuthError()
         }
     }
 
@@ -162,6 +170,7 @@ fun CreateAccountAuthSheet(
         if (ok) {
             selectedAvatarUri = pendingCamUri
             validationError = null
+            onClearAuthError()
         }
     }
 
@@ -178,8 +187,16 @@ fun CreateAccountAuthSheet(
         else validationError = if (language == AppLanguage.AR) "يرجى منح إذن الكاميرا لالتقاط صورة" else "Camera permission is required"
     }
 
+    val displayedError = authErrorMessage?.takeIf { it.isNotBlank() }
+        ?: validationError?.takeIf { it.isNotBlank() }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (!needsOnboarding) {
+                onClearAuthError()
+                onDismiss()
+            }
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
         Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
@@ -204,7 +221,10 @@ fun CreateAccountAuthSheet(
                         fontWeight = FontWeight.Black
                     )
                     if (!needsOnboarding) {
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = {
+                            onClearAuthError()
+                            onDismiss()
+                        }) {
                             Icon(Icons.Rounded.Close, contentDescription = "Close", tint = HatchTextPrimary)
                         }
                     }
@@ -219,6 +239,21 @@ fun CreateAccountAuthSheet(
                     color = HatchTextSecondary,
                     fontSize = 13.sp
                 )
+
+                if (!displayedError.isNullOrBlank()) {
+                    Text(
+                        text = displayedError,
+                        color = HatchRose500,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(HatchRose500.copy(alpha = 0.14f))
+                            .border(1.dp, HatchRose500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .padding(10.dp)
+                    )
+                }
 
                 if (!needsOnboarding) {
                     Spacer(modifier = Modifier.height(6.dp))
@@ -262,7 +297,11 @@ fun CreateAccountAuthSheet(
                         }
 
                         Button(
-                            onClick = onGoogleSignInClick,
+                            onClick = {
+                                validationError = null
+                                onClearAuthError()
+                                onGoogleSignInClick()
+                            },
                             enabled = !isSubmitting,
                             colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFF111111)),
                             shape = RoundedCornerShape(14.dp),
@@ -306,27 +345,15 @@ fun CreateAccountAuthSheet(
                     }
 
                     TextButton(
-                        onClick = onDismiss,
+                        onClick = {
+                            onClearAuthError()
+                            onDismiss()
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(strings.browseAsGuest, color = HatchTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                 } else {
-                    if (!validationError.isNullOrBlank()) {
-                        Text(
-                            text = validationError!!,
-                            color = HatchRose500,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(HatchRose500.copy(alpha = 0.14f))
-                                .border(1.dp, HatchRose500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(10.dp)
-                        )
-                    }
-
                     // Avatar Picker + Live Preview
                     AvatarPickerSection(
                         avatar = avatar,
@@ -337,6 +364,7 @@ fun CreateAccountAuthSheet(
                         onSelectPreset = { url ->
                             avatar = url
                             selectedAvatarUri = null
+                            onClearAuthError()
                         },
                         onPickGallery = { galleryLauncher.launch("image/*") },
                         onCaptureCamera = {
@@ -352,6 +380,7 @@ fun CreateAccountAuthSheet(
                         onValueChange = {
                             name = it
                             validationError = null
+                            onClearAuthError()
                         },
                         label = { Text(if (language == AppLanguage.AR) "الاسم الكامل / اسم المتجر *" else "Full Name *", color = HatchTextMuted, fontSize = 12.sp) },
                         leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
@@ -368,6 +397,7 @@ fun CreateAccountAuthSheet(
                         onDigitsChange = {
                             phoneDigits = it
                             validationError = null
+                            onClearAuthError()
                         }
                     )
 
