@@ -1,0 +1,1337 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HATCH Android Native — معاينة التطبيق الرسمي</title>
+  <meta name="description" content="صفحة المعاينة المستقلة لتطبيق HATCH Android Native المبني بلغة Kotlin و Jetpack Compose، مع استعراض الواجهات الحقيقية والتحقق المباشر من إصدارات APK." />
+  <meta property="og:title" content="HATCH Android Native — معاينة التطبيق الرسمي" />
+  <meta property="og:description" content="استعراض واجهات تطبيق HATCH الأصلي لنظام Android والتحقق من توفر ملف APK عبر GitHub Releases." />
+  <meta property="og:image" content="../pwa-512x512.png" />
+  <meta name="theme-color" content="#0A0A0A" />
+  <link rel="icon" type="image/png" href="../pwa-512x512.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0A0A0A;
+      --surface: #171717;
+      --surface-elevated: #1E1E1E;
+      --border: #262626;
+      --border-strong: #363636;
+      --gold: #F59E0B;
+      --gold-bright: #FBBF24;
+      --gold-dim: rgba(245, 158, 11, 0.14);
+      --gold-ring: rgba(245, 158, 11, 0.35);
+      --text: #FAFAFA;
+      --text-secondary: #B5B5B5;
+      --text-muted: #848484;
+      --success: #22C55E;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --container: 1180px;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      background-color: var(--bg);
+      color: var(--text);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'Cairo', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(ellipse 75% 45% at 50% -10%, rgba(245, 158, 11, 0.09), transparent 70%);
+      color: var(--text);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      direction: ltr;
+      unicode-bidi: isolate;
+    }
+
+    .latin {
+      font-family: 'Plus Jakarta Sans', 'Cairo', sans-serif;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 3px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: var(--container);
+      margin-inline: auto;
+      padding-inline: 20px;
+    }
+
+    /* Header (3 zones, single clean row) */
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background-color: rgba(10, 10, 10, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 70px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 44px;
+    }
+
+    .brand-logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      object-fit: cover;
+      border: 1px solid var(--gold-ring);
+      background-color: var(--surface);
+      flex-shrink: 0;
+    }
+
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.2;
+    }
+
+    .brand-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      color: var(--text);
+    }
+
+    .brand-sub {
+      font-size: 0.76rem;
+      color: var(--gold);
+      font-weight: 600;
+    }
+
+    .header-nav {
+      display: none;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .header-nav a {
+      font-size: 0.94rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      padding-block: 8px;
+      transition: color 0.18s ease;
+    }
+
+    .header-nav a:hover {
+      color: var(--gold);
+    }
+
+    .header-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border-strong);
+      background-color: var(--surface);
+      color: var(--text);
+      font-size: 0.88rem;
+      font-weight: 700;
+      transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+      white-space: nowrap;
+    }
+
+    .header-action:hover {
+      border-color: var(--gold);
+      color: var(--gold-bright);
+    }
+
+    @media (min-width: 768px) {
+      .header-nav {
+        display: flex;
+      }
+    }
+
+    /* Hero */
+    .hero {
+      padding-block: 52px 44px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+
+    @media (min-width: 900px) {
+      .hero {
+        padding-block: 72px 64px;
+      }
+      .hero-grid {
+        grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.9fr);
+        gap: 48px;
+      }
+    }
+
+    .hero-kicker {
+      color: var(--gold);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      margin: 0 0 12px;
+    }
+
+    .hero-title {
+      margin: 0 0 16px;
+      font-size: clamp(1.9rem, 4.2vw, 3rem);
+      font-weight: 800;
+      line-height: 1.22;
+      color: var(--text);
+    }
+
+    .hero-title span {
+      color: var(--gold);
+    }
+
+    .hero-desc {
+      margin: 0 0 20px;
+      max-width: 60ch;
+      font-size: 1.05rem;
+      color: var(--text-secondary);
+    }
+
+    .hero-meta {
+      margin: 0 0 28px;
+      font-size: 0.88rem;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+    }
+
+    .meta-sep {
+      color: var(--border-strong);
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+      gap: 14px;
+    }
+
+    .btn-primary,
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 50px;
+      padding: 12px 22px;
+      border-radius: var(--radius-md);
+      font-family: inherit;
+      font-size: 0.98rem;
+      font-weight: 700;
+      transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.15s ease;
+    }
+
+    .btn-primary {
+      background-color: var(--gold);
+      color: #0A0A0A;
+      border: 1px solid var(--gold);
+      cursor: pointer;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background-color: var(--gold-bright);
+      border-color: var(--gold-bright);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary:disabled,
+    .btn-primary[aria-disabled="true"] {
+      background-color: var(--surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border-strong);
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-secondary {
+      background-color: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--gold);
+      color: var(--gold-bright);
+    }
+
+    .release-status-box {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      max-width: 60ch;
+    }
+
+    .release-status-box strong {
+      color: var(--text);
+    }
+
+    .release-status-box.is-ready {
+      border-color: rgba(34, 197, 94, 0.35);
+    }
+
+    .release-status-box.is-ready strong {
+      color: var(--success);
+    }
+
+    .hero-brand-card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 16px;
+    }
+
+    .hero-emblem-wrap {
+      width: 112px;
+      height: 112px;
+      border-radius: 26px;
+      padding: 6px;
+      background: linear-gradient(145deg, rgba(245, 158, 11, 0.35), rgba(38, 38, 38, 0.4));
+    }
+
+    .hero-emblem-wrap img {
+      width: 100%;
+      height: 100%;
+      border-radius: 20px;
+      object-fit: cover;
+      display: block;
+      background-color: #0A0A0A;
+    }
+
+    .spec-mini-list {
+      width: 100%;
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      text-align: start;
+    }
+
+    .spec-mini-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .spec-mini-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .spec-mini-val {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    /* Sections */
+    .section {
+      padding-block: 56px;
+    }
+
+    .section-bordered {
+      border-top: 1px solid var(--border);
+    }
+
+    .section-head {
+      margin-bottom: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .section-eyebrow {
+      margin: 0;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--gold);
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: clamp(1.45rem, 2.8vw, 2rem);
+      font-weight: 800;
+      color: var(--text);
+      line-height: 1.3;
+    }
+
+    .section-subtitle {
+      margin: 0;
+      max-width: 65ch;
+      font-size: 0.98rem;
+      color: var(--text-secondary);
+    }
+
+    /* Screenshots Grid */
+    .screenshots-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 22px;
+    }
+
+    @media (min-width: 640px) {
+      .screenshots-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .screenshots-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .shot-card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: border-color 0.18s ease;
+    }
+
+    .shot-card:hover {
+      border-color: var(--border-strong);
+    }
+
+    .shot-frame {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      max-height: 470px;
+      margin-inline: auto;
+      border-radius: 22px;
+      background-color: #0F0F0F;
+      border: 1px solid var(--border-strong);
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shot-placeholder {
+      padding: 24px 18px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .shot-phone-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background-color: var(--gold-dim);
+      border: 1px solid var(--gold-ring);
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shot-placeholder-title {
+      margin: 0;
+      font-size: 0.96rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .shot-placeholder-note {
+      margin: 0;
+      font-size: 0.83rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    .shot-path {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background-color: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--gold-bright);
+      font-size: 0.78rem;
+      word-break: break-all;
+    }
+
+    .shot-zoom-btn {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: zoom-in;
+      display: block;
+    }
+
+    .shot-zoom-btn img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .shot-info {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .shot-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .shot-title {
+      margin: 0;
+      font-size: 1.04rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .shot-index {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--gold);
+      flex-shrink: 0;
+    }
+
+    .shot-desc {
+      margin: 0;
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+    }
+
+    .upload-guide {
+      margin-top: 24px;
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .upload-guide h3 {
+      margin: 0;
+      font-size: 0.98rem;
+      font-weight: 700;
+      color: var(--gold-bright);
+    }
+
+    .upload-guide p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    /* Features Grid */
+    .features-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 18px;
+    }
+
+    @media (min-width: 640px) {
+      .features-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .features-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .feature-card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .feature-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background-color: var(--gold-dim);
+      border: 1px solid var(--gold-ring);
+      color: var(--gold);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .feature-card h3 {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .feature-card p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    /* Version Info Table */
+    .version-card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .version-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+
+    @media (min-width: 720px) {
+      .version-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .version-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .version-cell {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border);
+      border-inline-end: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .version-label {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .version-value {
+      font-size: 0.96rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .version-link {
+      color: var(--gold-bright);
+      text-decoration: underline;
+      text-underline-offset: 4px;
+    }
+
+    /* Footer */
+    .site-footer {
+      border-top: 1px solid var(--border);
+      padding-block: 28px;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+    }
+
+    .footer-links a {
+      color: var(--text-secondary);
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .footer-links a:hover {
+      color: var(--gold);
+    }
+
+    /* Lightbox Modal */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background-color: rgba(0, 0, 0, 0.9);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .lightbox.is-open {
+      display: flex;
+    }
+
+    .lightbox-dialog {
+      position: relative;
+      max-width: 440px;
+      width: 100%;
+      background-color: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .lightbox-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .lightbox-title {
+      margin: 0;
+      font-size: 0.98rem;
+      font-weight: 700;
+    }
+
+    .lightbox-close {
+      min-width: 44px;
+      min-height: 44px;
+      border-radius: 10px;
+      border: 1px solid var(--border-strong);
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .lightbox-close:hover {
+      border-color: var(--gold);
+      color: var(--gold);
+    }
+
+    .lightbox-img {
+      width: 100%;
+      max-height: 75vh;
+      object-fit: contain;
+      border-radius: 12px;
+      background-color: #0A0A0A;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+      * {
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="#top" class="brand">
+        <img src="../pwa-512x512.png" alt="شعار تطبيق HATCH" class="brand-logo" width="38" height="38" />
+        <span class="brand-text">
+          <span class="brand-title latin">HATCH</span>
+          <span class="brand-sub">تطبيق Android الأصلي</span>
+        </span>
+      </a>
+
+      <nav class="header-nav" aria-label="التنقل السريع">
+        <a href="#screenshots">الواجهات الحقيقية</a>
+        <a href="#features">المميزات</a>
+        <a href="#release">معلومات الإصدار</a>
+      </nav>
+
+      <a href="../" class="header-action">النسخة الرئيسية</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <p class="hero-kicker">صفحة المعاينة المستقلة لتطبيق Android Native</p>
+          <h1 class="hero-title">تطبيق <span>HATCH</span> الأصلي للسوق السوداني</h1>
+          <p class="hero-desc">
+            تجربة أندرويد أصلية مبنية بلغة Kotlin و Jetpack Compose، تجمع التصفح السريع والبحث في السوق ودليل المتاجر والشركات ونظام الحسابات الثلاثة وتجربة الضيف الآمنة.
+          </p>
+          <p class="hero-meta">
+            <span class="mono">com.hatch.marketplace</span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span>الإصدار <span class="mono">1.0.0</span></span>
+            <span class="meta-sep" aria-hidden="true">·</span>
+            <span>يدعم Android 6.0 فأحدث</span>
+          </p>
+
+          <div class="hero-actions">
+            <div id="apk-action-slot">
+              <button
+                id="apk-download-btn"
+                type="button"
+                class="btn-primary"
+                disabled
+                aria-disabled="true"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span id="apk-btn-label">التحميل غير متاح بعد — جاري التحقق من GitHub Releases</span>
+              </button>
+            </div>
+
+            <a href="#screenshots" class="btn-secondary">
+              استعراض واجهات التطبيق
+            </a>
+          </div>
+
+          <div id="release-status" class="release-status-box" role="status" aria-live="polite">
+            جاري التحقق من إصدارات GitHub Releases للتأكد من وجود ملف <span class="mono">.apk</span> منشور...
+          </div>
+        </div>
+
+        <aside class="hero-brand-card" aria-label="ملخص التطبيق">
+          <div class="hero-emblem-wrap">
+            <img src="../pwa-512x512.png" alt="شعار HATCH" width="112" height="112" />
+          </div>
+          <div>
+            <strong class="latin" style="font-size: 1.25rem; display: block;">HATCH Android</strong>
+            <span style="color: var(--text-secondary); font-size: 0.9rem;">Kotlin · Jetpack Compose · Material 3</span>
+          </div>
+          <div class="spec-mini-list">
+            <div class="spec-mini-item">
+              <span class="spec-mini-label">الحد الأدنى</span>
+              <span class="spec-mini-val mono">API 23 (Android 6+)</span>
+            </div>
+            <div class="spec-mini-item">
+              <span class="spec-mini-label">الإصدار المستهدف</span>
+              <span class="spec-mini-val mono">API 35 (Android 15)</span>
+            </div>
+            <div class="spec-mini-item">
+              <span class="spec-mini-label">الحسابات المدعومة</span>
+              <span class="spec-mini-val">شخصي · متجر · شركة</span>
+            </div>
+            <div class="spec-mini-item">
+              <span class="spec-mini-label">التصفح بدون تسجيل</span>
+              <span class="spec-mini-val">نظام الضيف متاح</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="screenshots" class="section">
+      <div class="container">
+        <div class="section-head">
+          <p class="section-eyebrow">لقطات شاشة حقيقية من تطبيق أندرويد</p>
+          <h2 class="section-title">واجهات HATCH Android Native</h2>
+          <p class="section-subtitle">
+            كل بطاقة أدناه مخصصة لالتقاط شاشة حقيقي من تطبيق Jetpack Compose الفعلي داخل <span class="mono">android-native/</span>. لم تُضف أي صور وهمية؛ بمجرد رفع صور <span class="mono">PNG</span> بالأسماء الموضحة إلى مجلد <span class="mono">preview/screenshots/</span> ستظهر تلقائياً هنا مع إمكانية التكبير.
+          </p>
+        </div>
+
+        <div id="screenshots-grid" class="screenshots-grid"></div>
+
+        <div class="upload-guide">
+          <h3>تعليمات رفع الصور الحقيقية لاحقاً</h3>
+          <p>
+            التقط الصور مباشرة من تطبيق أندرويد على الهاتف أو المحاكي بصيغة <span class="mono">PNG</span>، ثم ارفعها إلى المسار
+            <span class="mono">preview/screenshots/</span> في المستودع بالأسماء الدقيقة:
+            <span class="mono">01-swipe.png</span> و
+            <span class="mono">02-market.png</span> و
+            <span class="mono">03-stores-companies.png</span> و
+            <span class="mono">04-product-detail.png</span> و
+            <span class="mono">05-profile.png</span>.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section section-bordered">
+      <div class="container">
+        <div class="section-head">
+          <p class="section-eyebrow">قدرات التطبيق الفعلي</p>
+          <h2 class="section-title">المميزات المبنية داخل Android Native</h2>
+          <p class="section-subtitle">
+            جميع هذه المزايا منفذة في شاشات Kotlin و Jetpack Compose الحالية في المستودع.
+          </p>
+        </div>
+
+        <div class="features-grid">
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="4" y="2" width="16" height="20" rx="3" />
+                <path d="M9 11l3-3 3 3" />
+                <path d="M9 15l3 3 3-3" />
+              </svg>
+            </div>
+            <h3>واجهة HATCH للتصفح السريع</h3>
+            <p>استعراض البطاقات والمنتجات بالسحب السريع للتمرير بين العروض في جميع المدن.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </div>
+            <h3>السوق وزرا المتاجر والشركات</h3>
+            <p>بحث مباشر مع شريط التصنيفات وزري «المتاجر» و«الشركات» أسفل الفئات للوصول للجهات التجارية.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 21h18" />
+                <path d="M5 21V7l7-4 7 4v14" />
+                <path d="M9 21v-6h6v6" />
+              </svg>
+            </div>
+            <h3>نظام الحسابات الثلاثة</h3>
+            <p>اختيار نوع الحساب بعد تسجيل الدخول: حساب شخصي، حساب متجر، أو حساب شركة بصفحة تجارية مستقلة.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            </div>
+            <h3>وضع الضيف الآمن</h3>
+            <p>تصفح السوق والمنتجات ودليل المتاجر والشركات دون تسجيل الدخول مع طلب Google عند البيع أو التفاوض.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
+            <h3>تفاصيل المنتج والتفاوض</h3>
+            <p>عرض الصور المتعددة والحالة والسعر بالعملة المحلية وتفاصيل البائع والتفاوض المباشر.</p>
+          </article>
+
+          <article class="feature-card">
+            <div class="feature-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <h3>Firebase و Google Sign-In</h3>
+            <p>مصادقة أصلية مع Google ومزامنة لحظية للملفات التجارية والمنتجات عبر Firestore.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="release" class="section section-bordered">
+      <div class="container">
+        <div class="section-head">
+          <p class="section-eyebrow">المواصفات التقنية</p>
+          <h2 class="section-title">معلومات الإصدار والبيئة البرمجية</h2>
+        </div>
+
+        <div class="version-card">
+          <div class="version-grid">
+            <div class="version-cell">
+              <span class="version-label">معرّف الحزمة (Application ID)</span>
+              <span class="version-value mono">com.hatch.marketplace</span>
+            </div>
+            <div class="version-cell">
+              <span class="version-label">الإصدار الحالي (Version)</span>
+              <span class="version-value mono">1.0.0 (versionCode 1)</span>
+            </div>
+            <div class="version-cell">
+              <span class="version-label">توافق نظام Android</span>
+              <span class="version-value">Android 6.0 (API 23) – Android 15 (API 35)</span>
+            </div>
+            <div class="version-cell">
+              <span class="version-label">الواجهة والمعمارية</span>
+              <span class="version-value">Kotlin 2.0 · Jetpack Compose · Hilt</span>
+            </div>
+            <div class="version-cell">
+              <span class="version-label">حالة ملف APK على GitHub Releases</span>
+              <span id="release-cell-status" class="version-value">جاري الفحص...</span>
+            </div>
+            <div class="version-cell">
+              <span class="version-label">مستودع المشروع</span>
+              <span class="version-value">
+                <a
+                  href="https://github.com/batydaishab-byte/Hatch"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="version-link mono"
+                >batydaishab-byte/Hatch</a>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>HATCH Android Native — صفحة المعاينة المستقلة</span>
+      <div class="footer-links">
+        <a href="../">فتح تطبيق الويب الرئيسي</a>
+        <a href="https://github.com/batydaishab-byte/Hatch/releases" target="_blank" rel="noopener noreferrer">صفحة الإصدارات على GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-labelledby="lightbox-title" hidden>
+    <div class="lightbox-dialog">
+      <div class="lightbox-top">
+        <h3 id="lightbox-title" class="lightbox-title">معاينة الواجهة</h3>
+        <button id="lightbox-close" type="button" class="lightbox-close" aria-label="إغلاق المعاينة">✕</button>
+      </div>
+      <img id="lightbox-img" class="lightbox-img" src="" alt="" />
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const SCREENSHOT_SLOTS = [
+        {
+          id: '01',
+          file: '01-swipe.png',
+          title: 'واجهة HATCH للتصفح السريع',
+          description: 'شاشة البطاقات والتمرير السريع لاكتشاف المنتجات والعروض الفورية.'
+        },
+        {
+          id: '02',
+          file: '02-market.png',
+          title: 'واجهة السوق',
+          description: 'شريط البحث والفئات وزرا «المتاجر» و«الشركات» أسفل التصنيفات مع شبكة المنتجات.'
+        },
+        {
+          id: '03',
+          file: '03-stores-companies.png',
+          title: 'دليل المتاجر والشركات',
+          description: 'قائمة المتاجر والشركات المسجلة والصفحة التجارية لكل جهة مع منتجاتها.'
+        },
+        {
+          id: '04',
+          file: '04-product-detail.png',
+          title: 'تفاصيل المنتجات',
+          description: 'عرض الصور والسعر والحالة والمدينة ومعلومات البائع والتفاوض.'
+        },
+        {
+          id: '05',
+          file: '05-profile.png',
+          title: 'الملف الشخصي',
+          description: 'إدارة الحساب الشخصي أو التجاري ومتابعة الإعلانات وإعدادات المستخدم.'
+        }
+      ];
+
+      const gridEl = document.getElementById('screenshots-grid');
+      const lightboxEl = document.getElementById('lightbox');
+      const lightboxImg = document.getElementById('lightbox-img');
+      const lightboxTitle = document.getElementById('lightbox-title');
+      const lightboxClose = document.getElementById('lightbox-close');
+
+      function openLightbox(src, title) {
+        lightboxImg.src = src;
+        lightboxImg.alt = title;
+        lightboxTitle.textContent = title;
+        lightboxEl.hidden = false;
+        lightboxEl.classList.add('is-open');
+        lightboxClose.focus();
+      }
+
+      function closeLightbox() {
+        lightboxEl.classList.remove('is-open');
+        lightboxEl.hidden = true;
+        lightboxImg.src = '';
+      }
+
+      lightboxClose.addEventListener('click', closeLightbox);
+      lightboxEl.addEventListener('click', function (event) {
+        if (event.target === lightboxEl) {
+          closeLightbox();
+        }
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && lightboxEl.classList.contains('is-open')) {
+          closeLightbox();
+        }
+      });
+
+      function createSlotCard(slot) {
+        const article = document.createElement('article');
+        article.className = 'shot-card';
+
+        const frame = document.createElement('div');
+        frame.className = 'shot-frame';
+
+        const placeholder = document.createElement('div');
+        placeholder.className = 'shot-placeholder';
+        placeholder.innerHTML =
+          '<div class="shot-phone-icon" aria-hidden="true">' +
+            '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+              '<rect x="5" y="2" width="14" height="20" rx="2.5" />' +
+              '<line x1="12" y1="18" x2="12.01" y2="18" />' +
+            '</svg>' +
+          '</div>' +
+          '<p class="shot-placeholder-title">بانتظار رفع لقطة شاشة حقيقية</p>' +
+          '<p class="shot-placeholder-note">ارفع لقطة من تطبيق Android Native بالاسم:</p>' +
+          '<code class="shot-path mono">preview/screenshots/' + slot.file + '</code>';
+
+        frame.appendChild(placeholder);
+
+        const info = document.createElement('div');
+        info.className = 'shot-info';
+        info.innerHTML =
+          '<div class="shot-header">' +
+            '<h3 class="shot-title">' + slot.title + '</h3>' +
+            '<span class="shot-index mono">' + slot.id + '/05</span>' +
+          '</div>' +
+          '<p class="shot-desc">' + slot.description + '</p>';
+
+        article.appendChild(frame);
+        article.appendChild(info);
+
+        // Probe real PNG file off-DOM so missing files never show a broken image frame.
+        const imgUrl = './screenshots/' + slot.file;
+        const probe = new Image();
+        probe.onload = function () {
+          if (probe.naturalWidth > 0) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'shot-zoom-btn';
+            btn.setAttribute('aria-label', 'تكبير ' + slot.title);
+
+            const realImg = document.createElement('img');
+            realImg.src = imgUrl;
+            realImg.alt = slot.title + ' — لقطة شاشة من تطبيق HATCH Android Native';
+            realImg.loading = 'lazy';
+
+            btn.appendChild(realImg);
+            btn.addEventListener('click', function () {
+              openLightbox(imgUrl, slot.title);
+            });
+
+            frame.innerHTML = '';
+            frame.appendChild(btn);
+          }
+        };
+        probe.src = imgUrl;
+
+        return article;
+      }
+
+      SCREENSHOT_SLOTS.forEach(function (slot) {
+        gridEl.appendChild(createSlotCard(slot));
+      });
+
+      // Verified GitHub Releases APK lookup
+      const actionSlot = document.getElementById('apk-action-slot');
+      const releaseStatus = document.getElementById('release-status');
+      const releaseCellStatus = document.getElementById('release-cell-status');
+      const RELEASES_API = 'https://api.github.com/repos/batydaishab-byte/Hatch/releases?per_page=10';
+
+      function setUnavailableState(message, shortCell) {
+        const btn = document.getElementById('apk-download-btn');
+        const label = document.getElementById('apk-btn-label');
+        if (btn && label) {
+          btn.disabled = true;
+          btn.setAttribute('aria-disabled', 'true');
+          label.textContent = 'تحميل APK غير متاح حالياً';
+        }
+        releaseStatus.classList.remove('is-ready');
+        releaseStatus.innerHTML = message;
+        releaseCellStatus.textContent = shortCell;
+      }
+
+      fetch(RELEASES_API, {
+        headers: { 'Accept': 'application/vnd.github+json' }
+      })
+        .then(function (res) {
+          if (!res.ok) {
+            throw new Error('HTTP ' + res.status);
+          }
+          return res.json();
+        })
+        .then(function (releases) {
+          if (!Array.isArray(releases) || releases.length === 0) {
+            setUnavailableState(
+              '<strong>لا يوجد ملف APK منشور في GitHub Releases حتى الآن.</strong> يظل زر التحميل معطلاً لحين إنشاء Release رسمي يحتوي على ملف <span class="mono">.apk</span>.',
+              'لا يوجد إصدار منشور بعد'
+            );
+            return;
+          }
+
+          let matchedRelease = null;
+          let matchedAsset = null;
+
+          for (let i = 0; i < releases.length; i++) {
+            const rel = releases[i];
+            if (!rel || rel.draft) continue;
+            const assets = Array.isArray(rel.assets) ? rel.assets : [];
+            const apk = assets.find(function (asset) {
+              return asset && typeof asset.name === 'string' && asset.name.toLowerCase().endsWith('.apk') && asset.browser_download_url;
+            });
+            if (apk) {
+              matchedRelease = rel;
+              matchedAsset = apk;
+              break;
+            }
+          }
+
+          if (!matchedRelease || !matchedAsset) {
+            setUnavailableState(
+              '<strong>لا يحتوي أي إصدار حالي على ملف APK جاهز.</strong> يظل زر التحميل معطلاً لحين إرفاق ملف <span class="mono">.apk</span> في أحدث Release.',
+              'بانتظار إرفاق ملف APK'
+            );
+            return;
+          }
+
+          const sizeMb = matchedAsset.size ? (matchedAsset.size / (1024 * 1024)).toFixed(1) + ' MB' : '';
+          const tag = matchedRelease.tag_name || matchedRelease.name || 'Release';
+          const published = matchedRelease.published_at
+            ? new Date(matchedRelease.published_at).toLocaleDateString('ar-SD', { year: 'numeric', month: 'short', day: 'numeric' })
+            : '';
+
+          const downloadLink = document.createElement('a');
+          downloadLink.href = matchedAsset.browser_download_url;
+          downloadLink.className = 'btn-primary';
+          downloadLink.setAttribute('download', matchedAsset.name);
+          const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          iconSvg.setAttribute('width', '20');
+          iconSvg.setAttribute('height', '20');
+          iconSvg.setAttribute('viewBox', '0 0 24 24');
+          iconSvg.setAttribute('fill', 'none');
+          iconSvg.setAttribute('stroke', 'currentColor');
+          iconSvg.setAttribute('stroke-width', '2');
+          iconSvg.setAttribute('aria-hidden', 'true');
+          iconSvg.innerHTML =
+            '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />' +
+            '<polyline points="7 10 12 15 17 10" />' +
+            '<line x1="12" y1="15" x2="12" y2="3" />';
+
+          const btnSpan = document.createElement('span');
+          btnSpan.appendChild(document.createTextNode('تحميل APK الرسمي ('));
+          const tagSpan = document.createElement('span');
+          tagSpan.className = 'mono';
+          tagSpan.textContent = tag;
+          btnSpan.appendChild(tagSpan);
+          if (sizeMb) {
+            btnSpan.appendChild(document.createTextNode(' · ' + sizeMb));
+          }
+          btnSpan.appendChild(document.createTextNode(')'));
+
+          downloadLink.appendChild(iconSvg);
+          downloadLink.appendChild(btnSpan);
+
+          actionSlot.innerHTML = '';
+          actionSlot.appendChild(downloadLink);
+
+          releaseStatus.classList.add('is-ready');
+          releaseStatus.innerHTML = '';
+          const statusStrong = document.createElement('strong');
+          statusStrong.textContent = 'يتوفر إصدار APK رسمي موثق:';
+          const fileMono = document.createElement('span');
+          fileMono.className = 'mono';
+          fileMono.textContent = matchedAsset.name;
+          releaseStatus.appendChild(statusStrong);
+          releaseStatus.appendChild(document.createTextNode(' الملف '));
+          releaseStatus.appendChild(fileMono);
+          if (published) {
+            releaseStatus.appendChild(document.createTextNode(' بتاريخ ' + published));
+          }
+          releaseStatus.appendChild(document.createTextNode('.'));
+          releaseCellStatus.textContent = tag + (sizeMb ? ' (' + sizeMb + ')' : '');
+        })
+        .catch(function () {
+          setUnavailableState(
+            '<strong>تعذر التحقق من GitHub Releases الآن.</strong> يبقى زر التحميل معطلاً حتى التأكد من توفر ملف <span class="mono">.apk</span> منشور.',
+            'غير متحقق منه حالياً'
+          );
+        });
+    })();
+  </script>
+</body>
+</html>
