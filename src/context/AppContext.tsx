@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import confetti from 'canvas-confetti';
+import type { User as FirebaseUser } from 'firebase/auth';
 import { 
   Product, 
   User, 
@@ -16,7 +17,8 @@ import {
   AdMobConfig,
   AdStats,
   SponsoredAdItem,
-  AdFormat
+  AdFormat,
+  AccountType
 } from '../types';
 import { translations } from '../data/translations';
 import { 
@@ -30,6 +32,25 @@ import {
   defaultAdStats,
   initialSponsoredAds
 } from '../data/mockData';
+import {
+  testFirestoreConnection,
+  subscribeToAuthState,
+  signInWithGooglePopup,
+  signOutFirebase,
+  fetchUserProfileFromFirestore,
+  upsertOnboardingUserToFirestore,
+  updateUserProfileInFirestore,
+  publishProductToFirestore,
+  subscribeToFirestoreCatalog,
+} from '../lib/firebase';
+import {
+  applyUserProfileUpdate,
+  buildOnboardedUser,
+  CreateAccountInput,
+  enrichProductWithSellerIdentity,
+  normalizeLegacyUser,
+  syncProductsForUpdatedUser,
+} from '../utils/accountHelpers';
 
 interface ToastState {
   id: string;
@@ -48,12 +69,24 @@ interface AppContextType {
   currentUser: User;
   switchUser: (userId: string) => void;
   availableUsers: User[];
-  createNewAccount: (userData: { name: string; phone: string; city: SudaneseCity; avatar?: string }) => void;
-  updateCurrentUser: (userData: Partial<User>) => void;
+  createNewAccount: (userData: CreateAccountInput) => Promise<void> | void;
+  updateCurrentUser: (userData: Partial<User>) => Promise<void> | void;
   isCreateAccountOpen: boolean;
   setIsCreateAccountOpen: (open: boolean) => void;
   isEditProfileOpen: boolean;
   setIsEditProfileOpen: (open: boolean) => void;
+
+  // Firebase Auth & Onboarding
+  firebaseUser: FirebaseUser | null;
+  isAuthLoading: boolean;
+  authOnboardingRequired: boolean;
+  signInWithGoogle: () => Promise<void>;
+  signOutGoogle: () => Promise<void>;
+
+  // Commercial Storefront Page
+  selectedBusinessId: string | null;
+  setSelectedBusinessId: (sellerId: string | null) => void;
+  openBusinessProfile: (sellerId: string) => void;
   
   // Products & Swipe Deck
   products: Product[];
@@ -242,7 +275,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         const parsed = JSON.parse(savedAll);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map(normalizeLegacyUser);
         }
       } catch (e) {
         console.error('Error parsing all users from localStorage', e);
@@ -252,12 +285,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return [...parsed, ...mockUsers];
+        return [...parsed, ...mockUsers].map(normalizeLegacyUser);
       } catch (e) {
         console.error('Error parsing custom users from localStorage', e);
       }
     }
-    return mockUsers;
+    return mockUsers.map(normalizeLegacyUser);
   });
 
   useEffect(() => {
@@ -268,13 +301,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const saved = localStorage.getItem('hatch_current_user');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        return normalizeLegacyUser(JSON.parse(saved));
       } catch (e) {
         console.error('Error parsing currentUser from localStorage', e);
       }
     }
-    return mockUsers[0];
+    return normalizeLegacyUser(mockUsers[0]);
   });
+
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
+  const [authOnboardingRequired, setAuthOnboardingRequired] = useState<boolean>(false);
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
   
   // Persisted or default products
   const [products, setProducts] = useState<Product[]>(() => {
@@ -785,6 +823,161 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, 3800);
   };
 
+  // Validate Firestore connectivity & observe Firebase Google Sign-In state
+  useEffect(() => {
+    testFirestoreConnection();
+
+    const unsubAuth = subscribeToAuthState(async (fbUser) => {
+      setFirebaseUser(fbUser);
+      if (!fbUser) {
+        setAuthOnboardingRequired(false);
+        return;
+      }
+
+      try {
+        const loaded = await fetchUserProfileFromFirestore(fbUser.uid, fbUser.email);
+        if (loaded && loaded.isComplete) {
+          // Existing user with completed profile -> go directly to app without account-type prompt
+          const existingNormalized = normalizeLegacyUser(loaded.user);
+          setAuthOnboardingRequired(false);
+          setCurrentUser(existingNormalized);
+          localStorage.setItem('hatch_current_user', JSON.stringify(existingNormalized));
+          setAvailableUsers((prev) => {
+            const exists = prev.some((u) => u.id === existingNormalized.id);
+            return exists
+              ? prev.map((u) => (u.id === existingNormalized.id ? existingNormalized : u))
+              : [existingNormalized, ...prev];
+          });
+          localStorage.setItem('hatch_seen_create_account', 'true');
+          setIsCreateAccountOpen(false);
+        } else {
+          // New user or incomplete profile -> keep active UID, trigger account-type onboarding
+          setAuthOnboardingRequired(true);
+          setIsCreateAccountOpen(true);
+        }
+      } catch (err) {
+        console.error('Error checking Firestore user profile after auth:', err);
+      }
+    });
+
+    return () => {
+      unsubAuth();
+    };
+  }, []);
+
+  // Subscribe to Firestore catalog updates cleanly and merge with local/mock items
+  useEffect(() => {
+    const unsubCatalog = subscribeToFirestoreCatalog(
+      Boolean(firebaseUser),
+      (fsUsers) => {
+        if (fsUsers.length === 0) return;
+        setAvailableUsers((prev) => {
+          const merged = [...prev];
+          fsUsers.forEach((fu) => {
+            const idx = merged.findIndex((u) => u.id === fu.id);
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...fu, phone: merged[idx].phone || fu.phone };
+            } else {
+              merged.unshift(fu);
+            }
+          });
+          return merged;
+        });
+      },
+      (fsProducts) => {
+        if (fsProducts.length === 0) return;
+        setProducts((prev) => {
+          const merged = [...prev];
+          fsProducts.forEach((fp) => {
+            const idx = merged.findIndex((p) => p.id === fp.id);
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...fp };
+            } else {
+              merged.unshift(fp);
+            }
+          });
+          return merged;
+        });
+      }
+    );
+
+    return () => {
+      unsubCatalog();
+    };
+  }, [firebaseUser?.uid]);
+
+  const signInWithGoogle = async () => {
+    setIsAuthLoading(true);
+    try {
+      const fbUser = await signInWithGooglePopup();
+      setFirebaseUser(fbUser);
+      const loaded = await fetchUserProfileFromFirestore(fbUser.uid, fbUser.email);
+      if (loaded && loaded.isComplete) {
+        const normalized = normalizeLegacyUser(loaded.user);
+        setAuthOnboardingRequired(false);
+        setCurrentUser(normalized);
+        localStorage.setItem('hatch_current_user', JSON.stringify(normalized));
+        setAvailableUsers((prev) => {
+          const exists = prev.some((u) => u.id === normalized.id);
+          return exists
+            ? prev.map((u) => (u.id === normalized.id ? normalized : u))
+            : [normalized, ...prev];
+        });
+        localStorage.setItem('hatch_seen_create_account', 'true');
+        setIsCreateAccountOpen(false);
+        showToast(
+          language === 'ar'
+            ? `أهلاً بعودتك يا ${normalized.name}!`
+            : `Welcome back, ${normalized.name}!`,
+          'success'
+        );
+      } else {
+        setAuthOnboardingRequired(true);
+        setIsCreateAccountOpen(true);
+        showToast(
+          language === 'ar'
+            ? 'تم تسجيل الدخول عبر Google بنجاح! اختر نوع حسابك واستكمل بياناتك'
+            : 'Signed in with Google! Choose your account type and complete your profile.',
+          'info'
+        );
+      }
+    } catch (err: any) {
+      console.error('Google Sign-In error:', err);
+      const code = err?.code || '';
+      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+        showToast(
+          language === 'ar'
+            ? 'تعذر إكمال تسجيل الدخول عبر Google في هذا المتصفح. يمكنك استكمال التسجيل مباشرة.'
+            : 'Could not complete Google Sign-In popup. You can complete registration directly.',
+          'warning'
+        );
+      }
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const signOutGoogle = async () => {
+    try {
+      await signOutFirebase();
+      setFirebaseUser(null);
+      setAuthOnboardingRequired(false);
+      const fallback = normalizeLegacyUser(mockUsers[0]);
+      setCurrentUser(fallback);
+      localStorage.setItem('hatch_current_user', JSON.stringify(fallback));
+      showToast(
+        language === 'ar' ? 'تم تسجيل الخروج بنجاح' : 'Signed out successfully',
+        'info'
+      );
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
+  };
+
+  const openBusinessProfile = (sellerId: string) => {
+    setSelectedBusinessId(sellerId);
+  };
+
   const switchUser = (userId: string) => {
     const user = availableUsers.find((u) => u.id === userId);
     if (user) {
@@ -799,38 +992,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  const createNewAccount = (userData: {
-    name: string;
-    phone: string;
-    city: SudaneseCity;
-    avatar?: string;
-  }) => {
-    const defaultAvatars = [
-      'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80',
-      'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=256&q=80',
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=256&q=80',
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80',
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80',
-    ];
+  const createNewAccount = async (userData: CreateAccountInput) => {
+    const activeFbUser = firebaseUser;
+    const targetUid = userData.uid || activeFbUser?.uid;
+    const existingForUid = targetUid
+      ? availableUsers.find((u) => u.id === targetUid)
+      : undefined;
 
-    const chosenAvatar = userData.avatar || defaultAvatars[Math.floor(Math.random() * defaultAvatars.length)];
+    const newUser = buildOnboardedUser(
+      {
+        ...userData,
+        uid: targetUid,
+        email: userData.email ?? activeFbUser?.email ?? undefined,
+      },
+      existingForUid
+    );
 
-    const newUser: User = {
-      id: 'user_' + Date.now(),
-      name: userData.name.trim(),
-      avatar: chosenAvatar,
-      phone: userData.phone.trim(),
-      city: userData.city,
-      rating: 5.0,
-      dealsCompleted: 0,
-      reportsCount: 0,
-      verifiedIdentity: false,
-      joinedDate: new Date().toISOString().split('T')[0],
-      role: 'user',
-    };
+    if (activeFbUser && targetUid === activeFbUser.uid) {
+      try {
+        await upsertOnboardingUserToFirestore(activeFbUser.uid, {
+          name: newUser.name,
+          phone: newUser.phone,
+          city: String(newUser.city),
+          avatar: newUser.avatar,
+          accountType: (newUser.accountType || 'personal') as AccountType,
+          businessActivity: newUser.businessActivity,
+          businessLogo: newUser.businessLogo,
+          email: activeFbUser.email,
+        });
+      } catch (err) {
+        console.error('Error saving onboarding user to Firestore:', err);
+        showToast(
+          language === 'ar'
+            ? 'تعذر حفظ البيانات في الخادم، تحقق من الاتصال وحاول مجدداً.'
+            : 'Could not save account details to server. Please check connection.',
+          'warning'
+        );
+        return;
+      }
+    }
 
     setAvailableUsers((prev) => {
-      const next = [newUser, ...prev];
+      const exists = prev.some((u) => u.id === newUser.id);
+      const next = exists
+        ? prev.map((u) => (u.id === newUser.id ? newUser : u))
+        : [newUser, ...prev];
       const customOnly = next.filter((u) => !mockUsers.some((m) => m.id === u.id));
       localStorage.setItem('hatch_custom_users', JSON.stringify(customOnly));
       return next;
@@ -839,6 +1045,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCurrentUser(newUser);
     localStorage.setItem('hatch_current_user', JSON.stringify(newUser));
     localStorage.setItem('hatch_seen_create_account', 'true');
+    setAuthOnboardingRequired(false);
     setIsCreateAccountOpen(false);
 
     confetti({
@@ -849,33 +1056,66 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     showToast(
       language === 'ar'
-        ? `أهلاً بك يا ${newUser.name}! تم إنشاء حسابك في هتش بنجاح 🎉`
-        : `Welcome ${newUser.name}! Your account on HATCH has been created 🎉`,
+        ? `أهلاً بك يا ${newUser.name}! تم حفظ حسابك في هتش بنجاح 🎉`
+        : `Welcome ${newUser.name}! Your account on HATCH is ready 🎉`,
       'success'
     );
   };
 
-  const updateCurrentUser = (userData: Partial<User>) => {
-    setCurrentUser((prev) => {
-      const updated: User = {
-        ...prev,
-        ...userData,
-      };
-      localStorage.setItem('hatch_current_user', JSON.stringify(updated));
-      return updated;
-    });
+  const updateCurrentUser = async (userData: Partial<User>) => {
+    const updated = applyUserProfileUpdate(currentUser, userData);
+
+    if (firebaseUser && currentUser.id === firebaseUser.uid) {
+      try {
+        await updateUserProfileInFirestore(firebaseUser.uid, {
+          name: updated.name,
+          phone: updated.phone,
+          city: String(updated.city),
+          avatar: updated.avatar,
+          accountType: updated.accountType,
+          businessActivity: updated.businessActivity || '',
+          businessLogo: updated.businessLogo,
+        });
+      } catch (err) {
+        console.error('Error updating profile in Firestore:', err);
+        showToast(
+          language === 'ar'
+            ? 'تعذر تحديث البيانات في الخادم، يرجى المحاولة مرة أخرى.'
+            : 'Could not update profile in Firestore. Please try again.',
+          'warning'
+        );
+        return;
+      }
+    }
+
+    setCurrentUser(updated);
+    localStorage.setItem('hatch_current_user', JSON.stringify(updated));
 
     setAvailableUsers((prev) => {
-      const next = prev.map((u) => (u.id === currentUser.id ? { ...u, ...userData } : u));
+      const exists = prev.some((u) => u.id === updated.id);
+      const next = exists
+        ? prev.map((u) => (u.id === updated.id ? updated : u))
+        : [updated, ...prev];
       const customOnly = next.filter((u) => !mockUsers.some((m) => m.id === u.id));
       localStorage.setItem('hatch_custom_users', JSON.stringify(customOnly));
       return next;
     });
 
+    // Sync updated identity / commercial branding across seller's listings seamlessly
+    setProducts((prev) => syncProductsForUpdatedUser(prev, updated));
+
     setIsEditProfileOpen(false);
 
+    const isUpgrade =
+      currentUser.accountType !== updated.accountType &&
+      (updated.accountType === 'store' || updated.accountType === 'company');
+
     showToast(
-      language === 'ar'
+      isUpgrade
+        ? language === 'ar'
+          ? `تمت ترقية حسابك إلى ${updated.accountType === 'store' ? 'متجر' : 'شركة'} بنجاح تحت نفس الحساب 🎉`
+          : `Account upgraded to ${updated.accountType} seamlessly under your existing ID 🎉`
+        : language === 'ar'
         ? 'تم تحديث بيانات الملف الشخصي بنجاح ✨'
         : 'Profile details updated successfully ✨',
       'success'
@@ -973,8 +1213,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     productData: Omit<Product, 'id' | 'createdAt' | 'viewsCount' | 'likesCount' | 'status'>
   ) => {
     const newId = 'prod_' + Date.now();
+    const enrichedData = enrichProductWithSellerIdentity(productData, currentUser);
     const newProduct: Product = {
-      ...productData,
+      ...enrichedData,
       id: newId,
       viewsCount: 1,
       likesCount: 0,
@@ -983,6 +1224,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     setProducts((prev) => [newProduct, ...prev]);
+
+    if (firebaseUser && currentUser.id === firebaseUser.uid) {
+      publishProductToFirestore(newProduct).catch((err) => {
+        console.error('Error persisting product to Firestore:', err);
+      });
+    }
+
     // Also trigger celebratory confetti
     confetti({
       particleCount: 90,
@@ -1754,6 +2002,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsCreateAccountOpen,
         isEditProfileOpen,
         setIsEditProfileOpen,
+        firebaseUser,
+        isAuthLoading,
+        authOnboardingRequired,
+        signInWithGoogle,
+        signOutGoogle,
+        selectedBusinessId,
+        setSelectedBusinessId,
+        openBusinessProfile,
         products,
         swipedIds,
         favorites,

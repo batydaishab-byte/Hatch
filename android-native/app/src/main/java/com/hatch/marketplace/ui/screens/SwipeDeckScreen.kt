@@ -85,6 +85,7 @@ import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.PaymentMethod
 import com.hatch.marketplace.data.model.Product
+import com.hatch.marketplace.data.model.resolvedSellerAccountType
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber300
 import com.hatch.marketplace.ui.theme.HatchAmber400
@@ -834,13 +835,18 @@ private fun SwipeCardContent(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
+                val sellerType = product.resolvedSellerAccountType()
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .background(HatchSurfaceDark.copy(alpha = 0.75f))
-                        .border(1.dp, HatchBorderDark, RoundedCornerShape(50))
+                        .border(
+                            width = 1.dp,
+                            color = if (sellerType.isCommercial()) HatchAmber500.copy(alpha = 0.45f) else HatchBorderDark,
+                            shape = RoundedCornerShape(50)
+                        )
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     if (product.sellerAvatar.isNotBlank()) {
@@ -850,18 +856,30 @@ private fun SwipeCardContent(
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .size(17.dp)
-                                .clip(CircleShape)
-                                .border(1.dp, HatchAmber400.copy(alpha = 0.55f), CircleShape)
+                                .clip(if (sellerType.isCommercial()) RoundedCornerShape(5.dp) else CircleShape)
+                                .border(1.dp, HatchAmber400.copy(alpha = 0.55f), if (sellerType.isCommercial()) RoundedCornerShape(5.dp) else CircleShape)
                         )
                     }
                     Text(
                         text = product.sellerName,
                         color = HatchTextPrimary,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = if (sellerType.isCommercial()) FontWeight.Bold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (sellerType.isCommercial()) {
+                        Text(
+                            text = strings.accountTypeLabel(sellerType.wireValue),
+                            color = HatchAmber400,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(HatchAmber500.copy(alpha = 0.16f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
                     Text(
                         text = "★ ${String.format(Locale.US, "%.1f", product.sellerRating.takeIf { it > 0 } ?: 4.9)}",
                         color = HatchAmber400,

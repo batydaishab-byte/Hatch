@@ -1,7 +1,9 @@
 package com.hatch.marketplace.ui.i18n
 
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.CategoryId
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.PaymentMethod
 import com.hatch.marketplace.data.model.ProductCondition
 
@@ -128,8 +130,49 @@ data class HatchStrings(
     val markAllRead: String,
     val adminTitle: String,
     val sponsoredLabel: String,
-    val adCountdownSkip: String
+    val adCountdownSkip: String,
+    val accountTypeChooserTitle: String,
+    val accountTypeChooserSubtitle: String,
+    val accountPersonalTitle: String,
+    val accountPersonalDesc: String,
+    val accountStoreTitle: String,
+    val accountStoreDesc: String,
+    val accountCompanyTitle: String,
+    val accountCompanyDesc: String,
+    val upgradeAccountTitle: String,
+    val viewStorefrontLabel: String,
+    val storefrontProductsTitle: String,
+    val storesButtonLabel: String,
+    val companiesButtonLabel: String,
+    val registeredStoresTitle: String,
+    val registeredCompaniesTitle: String,
+    val noStoresYet: String,
+    val noCompaniesYet: String,
+    val guestDialogTitle: String,
+    val guestDialogKeepBrowsing: String,
+    val guestPromptContactOrBuy: String,
+    val guestPromptSell: String,
+    val guestPromptOffer: String,
+    val guestPromptFavorites: String,
+    val guestPromptRateOrReport: String,
+    val guestPromptGeneral: String,
+    val guestStorefrontReadOnlyHint: String,
+    val guestDetailSignInToContact: String
 ) {
+    fun guestPromptMessage(reason: GuestPromptReason): String = when (reason) {
+        GuestPromptReason.CONTACT_OR_BUY -> guestPromptContactOrBuy
+        GuestPromptReason.SELL -> guestPromptSell
+        GuestPromptReason.OFFER_NEGOTIATE -> guestPromptOffer
+        GuestPromptReason.FAVORITES -> guestPromptFavorites
+        GuestPromptReason.RATE_OR_REPORT -> guestPromptRateOrReport
+        GuestPromptReason.GENERAL -> guestPromptGeneral
+    }
+
+    fun accountTypeLabel(accountType: String?): String = when (AccountType.fromWire(accountType)) {
+        AccountType.STORE -> if (language == AppLanguage.AR) "متجر" else "Store"
+        AccountType.COMPANY -> if (language == AppLanguage.AR) "شركة" else "Company"
+        AccountType.PERSONAL -> if (language == AppLanguage.AR) "حساب شخصي" else "Personal"
+    }
     fun categoryLabel(category: String): String = when (CategoryId.fromWire(category)) {
         CategoryId.PHONES -> if (language == AppLanguage.AR) "هواتف وأجهزة لوحية" else "Phones & Tablets"
         CategoryId.ELECTRONICS -> if (language == AppLanguage.AR) "إلكترونيات ولابتوب" else "Electronics & Laptops"
@@ -426,7 +469,34 @@ data class HatchStrings(
             markAllRead = "تحديد الكل كمقروء",
             adminTitle = "لوحة إدارة هتش",
             sponsoredLabel = "إعلان ممول",
-            adCountdownSkip = "تخطي الإعلان"
+            adCountdownSkip = "تخطي الإعلان",
+            accountTypeChooserTitle = "مرحباً بك في HATCH، اختر نوع حسابك",
+            accountTypeChooserSubtitle = "اختر نوع الحساب الذي يناسب نشاطك لاستكمال البيانات والبدء فوراً",
+            accountPersonalTitle = "حساب شخصي",
+            accountPersonalDesc = "للبيع والشراء والتفاوض مع المستخدمين.",
+            accountStoreTitle = "حساب متجر",
+            accountStoreDesc = "لعرض منتجات المتجر والوصول إلى العملاء.",
+            accountCompanyTitle = "حساب شركة",
+            accountCompanyDesc = "لعرض منتجات الشركة والتعريف بنشاطها.",
+            upgradeAccountTitle = "ترقية الحساب إلى متجر أو شركة",
+            viewStorefrontLabel = "زيارة الصفحة التجارية",
+            storefrontProductsTitle = "المنتجات المعروضة",
+            storesButtonLabel = "المتاجر",
+            companiesButtonLabel = "الشركات",
+            registeredStoresTitle = "المتاجر المسجلة",
+            registeredCompaniesTitle = "الشركات المسجلة",
+            noStoresYet = "لا توجد متاجر مسجلة حالياً",
+            noCompaniesYet = "لا توجد شركات مسجلة حالياً",
+            guestDialogTitle = "تسجيل الدخول إلى HATCH",
+            guestDialogKeepBrowsing = "متابعة التصفح كضيف",
+            guestPromptContactOrBuy = "هل ترغب في التواصل مع البائع؟ سجّل دخولك إلى HATCH للاستفادة من خدمات التواصل والشراء.",
+            guestPromptSell = "سجّل دخولك إلى HATCH لتتمكن من نشر منتجاتك والبيع.",
+            guestPromptOffer = "هل ترغب في تقديم عرض أو التفاوض؟ سجّل دخولك إلى HATCH للاستفادة من خدمات الشراء والتفاوض.",
+            guestPromptFavorites = "سجّل دخولك إلى HATCH لحفظ المنتجات في المفضلة والوصول إليها في أي وقت.",
+            guestPromptRateOrReport = "سجّل دخولك إلى HATCH لتتمكن من تقييم البائعين أو إرسال البلاغات.",
+            guestPromptGeneral = "سجّل دخولك إلى HATCH للاستفادة من جميع خدمات البيع والشراء والتواصل.",
+            guestStorefrontReadOnlyHint = "وضع التصفح كضيف — سجّل الدخول للتواصل أو الشراء من هذه الصفحة",
+            guestDetailSignInToContact = "التواصل والشراء متاح بعد تسجيل الدخول"
         )
 
         private val English = HatchStrings(
@@ -520,7 +590,34 @@ data class HatchStrings(
             markAllRead = "Mark All Read",
             adminTitle = "HATCH Admin Console",
             sponsoredLabel = "Sponsored",
-            adCountdownSkip = "Skip Ad"
+            adCountdownSkip = "Skip Ad",
+            accountTypeChooserTitle = "Welcome to HATCH, choose your account type",
+            accountTypeChooserSubtitle = "Select your account type to tailor your profile details",
+            accountPersonalTitle = "Personal Account",
+            accountPersonalDesc = "For buying, selling, and negotiating with users.",
+            accountStoreTitle = "Store Account",
+            accountStoreDesc = "To showcase store products and reach customers.",
+            accountCompanyTitle = "Company Account",
+            accountCompanyDesc = "To showcase company products and business profile.",
+            upgradeAccountTitle = "Upgrade to Store or Company",
+            viewStorefrontLabel = "Visit Commercial Page",
+            storefrontProductsTitle = "Listed Products",
+            storesButtonLabel = "Stores",
+            companiesButtonLabel = "Companies",
+            registeredStoresTitle = "Registered Stores",
+            registeredCompaniesTitle = "Registered Companies",
+            noStoresYet = "No registered stores yet",
+            noCompaniesYet = "No registered companies yet",
+            guestDialogTitle = "Sign in to HATCH",
+            guestDialogKeepBrowsing = "Keep Browsing as Guest",
+            guestPromptContactOrBuy = "Want to contact the seller? Sign in to HATCH to access messaging, buying, and negotiation.",
+            guestPromptSell = "Sign in to HATCH to publish your products and start selling.",
+            guestPromptOffer = "Want to make an offer or negotiate? Sign in to HATCH to unlock buying and negotiation.",
+            guestPromptFavorites = "Sign in to HATCH to save items to Favorites and sync them anytime.",
+            guestPromptRateOrReport = "Sign in to HATCH to rate sellers or submit reports.",
+            guestPromptGeneral = "Sign in to HATCH to access all buying, selling, and messaging features.",
+            guestStorefrontReadOnlyHint = "Guest browsing mode — Sign in to contact or buy from this page",
+            guestDetailSignInToContact = "Sign in to contact the seller or buy"
         )
     }
 }

@@ -33,21 +33,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Android
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Phone
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,12 +81,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -89,11 +98,15 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.hatch.marketplace.BuildConfig
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.NotificationItem
 import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.SudaneseCities
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
+import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.state.ReportRequest
 import com.hatch.marketplace.ui.state.ReviewRequest
@@ -138,13 +151,26 @@ fun CreateAccountAuthSheet(
     onClearAuthError: () -> Unit = {},
     onDismiss: () -> Unit,
     onGoogleSignInClick: () -> Unit,
-    onCompleteOnboarding: (name: String, phone: String, city: String, avatar: String, avatarUri: Uri?) -> Unit
+    onCompleteOnboarding: (
+        name: String,
+        phone: String,
+        city: String,
+        avatar: String,
+        avatarUri: Uri?,
+        accountType: String,
+        businessActivity: String,
+        businessLogo: String
+    ) -> Unit
 ) {
     val context = LocalContext.current
     val initialAvatar = remember(defaultAvatar) {
         defaultAvatar.takeIf { it.startsWith("https://") } ?: AVATAR_PRESETS.first()
     }
+    var selectedAccountType by remember(needsOnboarding) { mutableStateOf<AccountType?>(null) }
+    var onboardingStep by remember(needsOnboarding) { mutableIntStateOf(1) }
     var name by remember(defaultName) { mutableStateOf(defaultName) }
+    var businessActivity by remember { mutableStateOf("") }
+    var customLogoUrl by remember { mutableStateOf("") }
     var phoneDigits by remember { mutableStateOf("") }
     var city by remember { mutableStateOf(SudaneseCities.ALL.firstOrNull { it.contains("بورتسودان") } ?: SudaneseCities.ALL.first()) }
     var avatar by remember(initialAvatar) { mutableStateOf(initialAvatar) }
@@ -154,6 +180,8 @@ fun CreateAccountAuthSheet(
 
     LaunchedEffect(needsOnboarding) {
         validationError = null
+        onboardingStep = 1
+        selectedAccountType = null
     }
 
     val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
@@ -190,6 +218,8 @@ fun CreateAccountAuthSheet(
     val displayedError = authErrorMessage?.takeIf { it.isNotBlank() }
         ?: validationError?.takeIf { it.isNotBlank() }
 
+    val activeType = selectedAccountType ?: AccountType.PERSONAL
+
     Dialog(
         onDismissRequest = {
             if (!needsOnboarding) {
@@ -214,11 +244,19 @@ fun CreateAccountAuthSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val headerText = when {
+                        !needsOnboarding -> strings.signInTitle
+                        onboardingStep == 1 -> strings.accountTypeChooserTitle
+                        activeType == AccountType.STORE -> if (language == AppLanguage.AR) "بيانات حساب المتجر" else "Store Account Details"
+                        activeType == AccountType.COMPANY -> if (language == AppLanguage.AR) "بيانات حساب الشركة" else "Company Account Details"
+                        else -> if (language == AppLanguage.AR) "بيانات الحساب الشخصي" else "Personal Account Details"
+                    }
                     Text(
-                        text = if (needsOnboarding) strings.createAccountTitle else strings.signInTitle,
+                        text = headerText,
                         color = HatchAmber400,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Black
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.weight(1f)
                     )
                     if (!needsOnboarding) {
                         IconButton(onClick = {
@@ -231,10 +269,12 @@ fun CreateAccountAuthSheet(
                 }
 
                 Text(
-                    text = if (needsOnboarding) {
-                        if (language == AppLanguage.AR) "أكمل بياناتك للبدء في البيع والشراء على هتش" else "Complete your seller profile to trade on HATCH"
-                    } else {
-                        strings.signInSubtitle
+                    text = when {
+                        !needsOnboarding -> strings.signInSubtitle
+                        onboardingStep == 1 -> strings.accountTypeChooserSubtitle
+                        activeType == AccountType.STORE -> if (language == AppLanguage.AR) "أدخل بيانات المتجر لعرض منتجاتك للعملاء باسم وهوية متجرك" else "Enter your store details to display products under your brand"
+                        activeType == AccountType.COMPANY -> if (language == AppLanguage.AR) "أدخل بيانات الشركة ومجال العمل لإنشاء صفحتك التجارية" else "Enter your company profile and business field"
+                        else -> if (language == AppLanguage.AR) "أكمل بياناتك للبدء في البيع والشراء على هتش" else "Complete your details to buy and sell on HATCH"
                     },
                     color = HatchTextSecondary,
                     fontSize = 13.sp
@@ -334,9 +374,9 @@ fun CreateAccountAuthSheet(
                             Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
                             Text(
                                 text = if (language == AppLanguage.AR) {
-                                    "بعد اختيار حساب Google، ستكمل الاسم ورقم الهاتف السوداني والمدينة والصورة مرة واحدة فقط بدون رسائل SMS."
+                                    "بعد اختيار حساب Google، ستختار نوع حسابك (شخصي، متجر، أو شركة) وتكمل بياناتك مرة واحدة فقط."
                                 } else {
-                                    "After picking your Google account, you will complete your name, Sudan phone, city, and avatar once without SMS fees."
+                                    "After picking your Google account, you will choose Personal, Store, or Company and complete your profile once."
                                 },
                                 color = HatchTextMuted,
                                 fontSize = 11.sp
@@ -353,16 +393,104 @@ fun CreateAccountAuthSheet(
                     ) {
                         Text(strings.browseAsGuest, color = HatchTextMuted, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
+                } else if (onboardingStep == 1) {
+                    // Step 1: Choose Account Type
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    AccountTypeOptionCard(
+                        icon = Icons.Rounded.Person,
+                        emoji = "👤",
+                        title = strings.accountPersonalTitle,
+                        description = strings.accountPersonalDesc,
+                        selected = selectedAccountType == AccountType.PERSONAL,
+                        onClick = {
+                            selectedAccountType = AccountType.PERSONAL
+                            validationError = null
+                            onClearAuthError()
+                            onboardingStep = 2
+                        }
+                    )
+
+                    AccountTypeOptionCard(
+                        icon = Icons.Rounded.Storefront,
+                        emoji = "🏪",
+                        title = strings.accountStoreTitle,
+                        description = strings.accountStoreDesc,
+                        selected = selectedAccountType == AccountType.STORE,
+                        onClick = {
+                            selectedAccountType = AccountType.STORE
+                            if (name == defaultName) name = ""
+                            validationError = null
+                            onClearAuthError()
+                            onboardingStep = 2
+                        }
+                    )
+
+                    AccountTypeOptionCard(
+                        icon = Icons.Rounded.Business,
+                        emoji = "🏢",
+                        title = strings.accountCompanyTitle,
+                        description = strings.accountCompanyDesc,
+                        selected = selectedAccountType == AccountType.COMPANY,
+                        onClick = {
+                            selectedAccountType = AccountType.COMPANY
+                            if (name == defaultName) name = ""
+                            validationError = null
+                            onClearAuthError()
+                            onboardingStep = 2
+                        }
+                    )
                 } else {
-                    // Avatar Picker + Live Preview
+                    // Step 2: Dynamic fields per AccountType
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(HatchSurfaceDark)
+                            .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .clickable {
+                                validationError = null
+                                onboardingStep = 1
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(18.dp))
+                            Text(
+                                text = strings.accountTypeLabel(activeType.wireValue),
+                                color = HatchAmber400,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 13.sp
+                            )
+                        }
+                        Text(
+                            text = if (language == AppLanguage.AR) "تغيير النوع" else "Change Type",
+                            color = HatchTextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    val photoSectionTitle = when (activeType) {
+                        AccountType.STORE -> if (language == AppLanguage.AR) "شعار المتجر" else "Store Logo"
+                        AccountType.COMPANY -> if (language == AppLanguage.AR) "شعار الشركة" else "Company Logo"
+                        AccountType.PERSONAL -> if (language == AppLanguage.AR) "الصورة الشخصية (اختياري)" else "Profile Photo (Optional)"
+                    }
+
+                    val effectivePreviewUrl = customLogoUrl.trim().takeIf { activeType.isCommercial() && it.startsWith("https://") } ?: avatar
+
                     AvatarPickerSection(
-                        avatar = avatar,
+                        sectionTitle = photoSectionTitle,
+                        avatar = effectivePreviewUrl,
                         selectedAvatarUri = selectedAvatarUri,
                         defaultGooglePhoto = defaultAvatar,
                         signerReady = signerReady,
                         language = language,
                         onSelectPreset = { url ->
                             avatar = url
+                            customLogoUrl = ""
                             selectedAvatarUri = null
                             onClearAuthError()
                         },
@@ -374,7 +502,41 @@ fun CreateAccountAuthSheet(
                         onClearLocalPhoto = { selectedAvatarUri = null }
                     )
 
-                    // Full Name
+                    if (activeType.isCommercial()) {
+                        OutlinedTextField(
+                            value = customLogoUrl,
+                            onValueChange = {
+                                customLogoUrl = it
+                                selectedAvatarUri = null
+                                validationError = null
+                                onClearAuthError()
+                            },
+                            label = {
+                                Text(
+                                    text = if (language == AppLanguage.AR) "رابط الشعار HTTPS (اختياري)" else "Logo HTTPS URL (Optional)",
+                                    color = HatchTextMuted,
+                                    fontSize = 12.sp
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
+                            singleLine = true,
+                            colors = hatchInputColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    val nameFieldLabel = when (activeType) {
+                        AccountType.STORE -> if (language == AppLanguage.AR) "اسم المتجر *" else "Store Name *"
+                        AccountType.COMPANY -> if (language == AppLanguage.AR) "اسم الشركة *" else "Company Name *"
+                        AccountType.PERSONAL -> if (language == AppLanguage.AR) "الاسم *" else "Full Name *"
+                    }
+                    val nameFieldIcon = when (activeType) {
+                        AccountType.STORE -> Icons.Rounded.Storefront
+                        AccountType.COMPANY -> Icons.Rounded.Business
+                        AccountType.PERSONAL -> Icons.Rounded.Person
+                    }
+
                     OutlinedTextField(
                         value = name,
                         onValueChange = {
@@ -382,13 +544,43 @@ fun CreateAccountAuthSheet(
                             validationError = null
                             onClearAuthError()
                         },
-                        label = { Text(if (language == AppLanguage.AR) "الاسم الكامل / اسم المتجر *" else "Full Name *", color = HatchTextMuted, fontSize = 12.sp) },
-                        leadingIcon = { Icon(Icons.Rounded.Person, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
+                        label = { Text(nameFieldLabel, color = HatchTextMuted, fontSize = 12.sp) },
+                        leadingIcon = { Icon(nameFieldIcon, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
                         singleLine = true,
                         colors = hatchInputColors(),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    if (activeType.isCommercial()) {
+                        val activityLabel = if (activeType == AccountType.STORE) {
+                            if (language == AppLanguage.AR) "نوع النشاط (مثلاً: هواتف، أزياء، إلكترونيات) *" else "Store Activity *"
+                        } else {
+                            if (language == AppLanguage.AR) "مجال العمل (مثلاً: طاقة شمسية، استيراد، مقاولات) *" else "Business Field *"
+                        }
+                        OutlinedTextField(
+                            value = businessActivity,
+                            onValueChange = {
+                                businessActivity = it
+                                validationError = null
+                                onClearAuthError()
+                            },
+                            label = { Text(activityLabel, color = HatchTextMuted, fontSize = 12.sp) },
+                            leadingIcon = { Icon(Icons.Rounded.Work, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(18.dp)) },
+                            singleLine = true,
+                            colors = hatchInputColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    // City Selector
+                    Text(if (language == AppLanguage.AR) "المدينة / الولاية *" else "City / State *", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SudaneseCities.ALL.forEach { c ->
+                            SelectablePill(c.substringBefore(" ("), city == c) { city = c }
+                        }
+                    }
 
                     // Sudan Phone with +249 Badge
                     SudanPhoneInputRow(
@@ -400,14 +592,6 @@ fun CreateAccountAuthSheet(
                             onClearAuthError()
                         }
                     )
-
-                    // City Selector
-                    Text(if (language == AppLanguage.AR) "المدينة / الولاية *" else "City / State *", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SudaneseCities.ALL.forEach { c ->
-                            SelectablePill(c.substringBefore(" ("), city == c) { city = c }
-                        }
-                    }
 
                     Row(
                         modifier = Modifier
@@ -437,7 +621,19 @@ fun CreateAccountAuthSheet(
                         onClick = {
                             val cleanName = name.trim()
                             if (cleanName.length < 2) {
-                                validationError = if (language == AppLanguage.AR) "يرجى كتابة الاسم الكامل (حرفين فأكثر)" else "Please enter your full name"
+                                validationError = when (activeType) {
+                                    AccountType.STORE -> if (language == AppLanguage.AR) "يرجى كتابة اسم المتجر (حرفين فأكثر)" else "Please enter store name"
+                                    AccountType.COMPANY -> if (language == AppLanguage.AR) "يرجى كتابة اسم الشركة (حرفين فأكثر)" else "Please enter company name"
+                                    AccountType.PERSONAL -> if (language == AppLanguage.AR) "يرجى كتابة الاسم (حرفين فأكثر)" else "Please enter your name"
+                                }
+                                return@Button
+                            }
+                            if (activeType.isCommercial() && businessActivity.trim().length < 2) {
+                                validationError = if (activeType == AccountType.STORE) {
+                                    if (language == AppLanguage.AR) "يرجى تحديد نوع نشاط المتجر" else "Please enter store activity"
+                                } else {
+                                    if (language == AppLanguage.AR) "يرجى تحديد مجال عمل الشركة" else "Please enter business field"
+                                }
                                 return@Button
                             }
                             if (phoneDigits.length < 8) {
@@ -445,7 +641,18 @@ fun CreateAccountAuthSheet(
                                 return@Button
                             }
                             val normalizedPhone = HatchFormatters.normalizeSudanPhone(phoneDigits)
-                            onCompleteOnboarding(cleanName, normalizedPhone, city, avatar, selectedAvatarUri)
+                            val resolvedUrl = customLogoUrl.trim().takeIf { activeType.isCommercial() && it.startsWith("https://") } ?: avatar
+                            val logoParam = if (activeType.isCommercial()) resolvedUrl else ""
+                            onCompleteOnboarding(
+                                cleanName,
+                                normalizedPhone,
+                                city,
+                                resolvedUrl,
+                                selectedAvatarUri,
+                                activeType.wireValue,
+                                if (activeType.isCommercial()) businessActivity.trim() else "",
+                                logoParam
+                            )
                         },
                         enabled = !isSubmitting,
                         colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
@@ -460,6 +667,60 @@ fun CreateAccountAuthSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AccountTypeOptionCard(
+    icon: ImageVector,
+    emoji: String,
+    title: String,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) HatchAmber500.copy(alpha = 0.14f) else HatchSurfaceDark)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) HatchAmber500 else HatchBorderDark,
+                shape = RoundedCornerShape(18.dp)
+            )
+            .clickable { onClick() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(50.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(HatchCardElevated)
+                .border(1.dp, if (selected) HatchAmber500 else HatchBorderDark, RoundedCornerShape(14.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(26.dp))
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = "$emoji $title",
+                color = HatchTextPrimary,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Black
+            )
+            Text(
+                text = description,
+                color = HatchTextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
+            )
+        }
+        if (selected) {
+            Icon(Icons.Rounded.Check, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -529,6 +790,7 @@ private fun SudanPhoneInputRow(
 
 @Composable
 private fun AvatarPickerSection(
+    sectionTitle: String,
     avatar: String,
     selectedAvatarUri: Uri?,
     defaultGooglePhoto: String,
@@ -550,7 +812,7 @@ private fun AvatarPickerSection(
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            text = if (language == AppLanguage.AR) "صورة الملف الشخصي" else "Profile Photo",
+            text = sectionTitle,
             color = HatchTextSecondary,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold
@@ -666,14 +928,28 @@ fun EditProfileDialog(
     currentPhone: String,
     isSubmitting: Boolean,
     language: AppLanguage,
+    strings: HatchStrings,
     onDismiss: () -> Unit,
-    onSave: (name: String, phone: String, city: String, avatar: String, avatarUri: Uri?) -> Unit
+    onSave: (
+        name: String,
+        phone: String,
+        city: String,
+        avatar: String,
+        avatarUri: Uri?,
+        accountType: String,
+        businessActivity: String,
+        businessLogo: String
+    ) -> Unit
 ) {
     val context = LocalContext.current
+    val initialType = remember(user.uid, user.accountType) { user.resolvedAccountType() }
+    var accountType by remember(user.uid) { mutableStateOf(initialType) }
     var name by remember(user.uid) { mutableStateOf(user.name) }
+    var businessActivity by remember(user.uid) { mutableStateOf(user.businessActivity.orEmpty()) }
+    var customLogoUrl by remember(user.uid) { mutableStateOf(user.businessLogo.orEmpty()) }
     var phoneDigits by remember(user.uid) { mutableStateOf(extractLocalSudanDigits(currentPhone)) }
     var city by remember(user.uid) { mutableStateOf(user.city.ifBlank { SudaneseCities.ALL.first() }) }
-    var avatar by remember(user.uid) { mutableStateOf(user.avatar.ifBlank { AVATAR_PRESETS.first() }) }
+    var avatar by remember(user.uid) { mutableStateOf(user.displayLogoOrAvatar().ifBlank { AVATAR_PRESETS.first() }) }
     var selectedAvatarUri by remember(user.uid) { mutableStateOf<Uri?>(null) }
     var pendingCamUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -699,23 +975,87 @@ fun EditProfileDialog(
         if (granted) launchCamera()
     }
 
+    val effectivePreviewUrl = customLogoUrl.trim().takeIf { accountType.isCommercial() && it.startsWith("https://") } ?: avatar
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = HatchSurfaceDark,
-        title = { Text(if (language == AppLanguage.AR) "تعديل الملف الشخصي" else "Edit Profile", color = HatchAmber400, fontWeight = FontWeight.Black) },
+        title = {
+            Text(
+                text = if (initialType == AccountType.PERSONAL && accountType.isCommercial()) {
+                    strings.upgradeAccountTitle
+                } else {
+                    if (language == AppLanguage.AR) "تعديل الحساب والملف الشخصي" else "Edit Profile & Account"
+                },
+                color = HatchAmber400,
+                fontWeight = FontWeight.Black,
+                fontSize = 16.sp
+            )
+        },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(HatchCardElevated)
+                        .border(1.dp, HatchAmber500.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = if (initialType == AccountType.PERSONAL) {
+                                strings.upgradeAccountTitle
+                            } else {
+                                if (language == AppLanguage.AR) "نوع الحساب" else "Account Type"
+                            },
+                            color = HatchAmber400,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AccountType.entries.forEach { t ->
+                            SelectablePill(strings.accountTypeLabel(t.wireValue), accountType == t) {
+                                accountType = t
+                            }
+                        }
+                    }
+                    if (initialType == AccountType.PERSONAL && accountType.isCommercial()) {
+                        Text(
+                            text = if (language == AppLanguage.AR) {
+                                "تتم الترقية على نفس حسابك وتبقى صفقاتك ومنتجاتك والتوثيق كما هي."
+                            } else {
+                                "Upgrading keeps your exact UID, deals, listings, and verification intact."
+                            },
+                            color = HatchEmerald400,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
                 AvatarPickerSection(
-                    avatar = avatar,
+                    sectionTitle = when (accountType) {
+                        AccountType.STORE -> if (language == AppLanguage.AR) "شعار المتجر" else "Store Logo"
+                        AccountType.COMPANY -> if (language == AppLanguage.AR) "شعار الشركة" else "Company Logo"
+                        AccountType.PERSONAL -> if (language == AppLanguage.AR) "صورة الملف الشخصي" else "Profile Photo"
+                    },
+                    avatar = effectivePreviewUrl,
                     selectedAvatarUri = selectedAvatarUri,
                     defaultGooglePhoto = user.avatar,
                     signerReady = signerReady,
                     language = language,
                     onSelectPreset = { url ->
                         avatar = url
+                        customLogoUrl = ""
                         selectedAvatarUri = null
                     },
                     onPickGallery = { galleryLauncher.launch("image/*") },
@@ -725,12 +1065,46 @@ fun EditProfileDialog(
                     },
                     onClearLocalPhoto = { selectedAvatarUri = null }
                 )
-                HatchField(name, { name = it }, if (language == AppLanguage.AR) "الاسم" else "Name")
+
+                if (accountType.isCommercial()) {
+                    HatchField(
+                        value = customLogoUrl,
+                        onValueChange = {
+                            customLogoUrl = it
+                            selectedAvatarUri = null
+                        },
+                        label = if (language == AppLanguage.AR) "رابط الشعار HTTPS (اختياري)" else "Logo HTTPS URL (Optional)"
+                    )
+                }
+
+                HatchField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = when (accountType) {
+                        AccountType.STORE -> if (language == AppLanguage.AR) "اسم المتجر *" else "Store Name *"
+                        AccountType.COMPANY -> if (language == AppLanguage.AR) "اسم الشركة *" else "Company Name *"
+                        AccountType.PERSONAL -> if (language == AppLanguage.AR) "الاسم *" else "Name *"
+                    }
+                )
+
+                if (accountType.isCommercial()) {
+                    HatchField(
+                        value = businessActivity,
+                        onValueChange = { businessActivity = it },
+                        label = if (accountType == AccountType.STORE) {
+                            if (language == AppLanguage.AR) "نوع النشاط *" else "Store Activity *"
+                        } else {
+                            if (language == AppLanguage.AR) "مجال العمل *" else "Business Field *"
+                        }
+                    )
+                }
+
                 SudanPhoneInputRow(
                     digits = phoneDigits,
                     language = language,
                     onDigitsChange = { phoneDigits = it }
                 )
+
                 Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SudaneseCities.ALL.forEach { c ->
                         SelectablePill(c.substringBefore(" ("), city == c) { city = c }
@@ -739,9 +1113,22 @@ fun EditProfileDialog(
             }
         },
         confirmButton = {
+            val activityValid = !accountType.isCommercial() || businessActivity.trim().length >= 2
             Button(
-                onClick = { onSave(name, HatchFormatters.normalizeSudanPhone(phoneDigits), city, avatar, selectedAvatarUri) },
-                enabled = !isSubmitting && name.trim().length >= 2 && phoneDigits.length >= 8,
+                onClick = {
+                    val resolvedUrl = customLogoUrl.trim().takeIf { accountType.isCommercial() && it.startsWith("https://") } ?: avatar
+                    onSave(
+                        name.trim(),
+                        HatchFormatters.normalizeSudanPhone(phoneDigits),
+                        city,
+                        resolvedUrl,
+                        selectedAvatarUri,
+                        accountType.wireValue,
+                        if (accountType.isCommercial()) businessActivity.trim() else "",
+                        if (accountType.isCommercial()) resolvedUrl else ""
+                    )
+                },
+                enabled = !isSubmitting && name.trim().length >= 2 && phoneDigits.length >= 8 && activityValid,
                 colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
             ) { Text(if (language == AppLanguage.AR) "حفظ" else "Save", fontWeight = FontWeight.Black) }
         },
@@ -1065,4 +1452,112 @@ fun NativeAppInfoDialog(language: AppLanguage, onDismiss: () -> Unit) {
             TextButton(onClick = onDismiss) { Text(if (language == AppLanguage.AR) "إغلاق" else "Close", color = HatchTextMuted) }
         }
     )
+}
+
+@Composable
+fun GuestAuthPromptDialog(
+    reason: GuestPromptReason,
+    language: AppLanguage,
+    strings: HatchStrings,
+    onContinueWithGoogle: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val promptBody = strings.guestPromptMessage(reason)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = true)
+    ) {
+        Surface(
+            color = HatchSurfaceDark,
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.5.dp, HatchAmber500.copy(alpha = 0.45f), RoundedCornerShape(24.dp))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(HatchAmber500.copy(alpha = 0.14f))
+                        .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lock,
+                        contentDescription = null,
+                        tint = HatchAmber400,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                Text(
+                    text = strings.guestDialogTitle,
+                    color = HatchAmber400,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = promptBody,
+                    color = HatchTextPrimary,
+                    fontSize = 14.sp,
+                    lineHeight = 22.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Button(
+                    onClick = onContinueWithGoogle,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = HatchAmber500,
+                        contentColor = HatchBgDark
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Color.White),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "G",
+                            color = Color(0xFF4285F4),
+                            fontWeight = FontWeight.Black,
+                            fontSize = 14.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = strings.signInGoogle,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 14.sp
+                    )
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = strings.guestDialogKeepBrowsing,
+                        color = HatchTextSecondary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+        }
+    }
 }

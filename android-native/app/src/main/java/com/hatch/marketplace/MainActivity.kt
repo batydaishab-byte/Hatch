@@ -33,8 +33,11 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.firebase.auth.GoogleAuthProvider
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.MainTab
+import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.ToastType
 import com.hatch.marketplace.ui.components.AdMobBannerCard
 import com.hatch.marketplace.ui.components.HatchBottomNav
@@ -45,9 +48,12 @@ import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.modals.AdMobInterstitialModal
 import com.hatch.marketplace.ui.modals.AdMobRewardedModal
 import com.hatch.marketplace.ui.modals.AdminConversationModal
+import com.hatch.marketplace.ui.modals.BusinessProfileModal
+import com.hatch.marketplace.ui.modals.CommercialDirectoryModal
 import com.hatch.marketplace.ui.modals.CreateAccountAuthSheet
 import com.hatch.marketplace.ui.modals.EditListingModal
 import com.hatch.marketplace.ui.modals.EditProfileDialog
+import com.hatch.marketplace.ui.modals.GuestAuthPromptDialog
 import com.hatch.marketplace.ui.modals.MakeOfferDialog
 import com.hatch.marketplace.ui.modals.NativeAppInfoDialog
 import com.hatch.marketplace.ui.modals.NotificationsModal
@@ -334,7 +340,9 @@ fun HatchMarketplaceRoot(
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onOpenAuth = { viewModel.openAuthSheet() },
                             onAdImpression = { viewModel.recordAdImpression(it) },
-                            onAdClick = { viewModel.recordAdClick(it.id) }
+                            onAdClick = { viewModel.recordAdClick(it.id) },
+                            onOpenStoresDirectory = { viewModel.openCommercialDirectory(AccountType.STORE) },
+                            onOpenCompaniesDirectory = { viewModel.openCommercialDirectory(AccountType.COMPANY) }
                         )
 
                         MainTab.CHAT -> ChatScreen(
@@ -378,6 +386,9 @@ fun HatchMarketplaceRoot(
                             onSelectSubTab = { viewModel.selectProfileSubTab(it) },
                             onOpenAuth = { viewModel.openAuthSheet() },
                             onOpenEditProfile = { viewModel.openEditProfile() },
+                            onOpenOwnBusinessProfile = {
+                                state.currentUser?.uid?.let { viewModel.openBusinessProfile(it) }
+                            },
                             onSignOut = { viewModel.signOut() },
                             onOpenProduct = { viewModel.openProductDetail(it) },
                             onEditProduct = { viewModel.openEditProduct(it) },
@@ -446,6 +457,7 @@ fun HatchMarketplaceRoot(
                 product = prod,
                 isFavorite = state.favoriteIds.contains(prod.id),
                 isOwner = state.auth.firebaseUser?.uid == prod.sellerId,
+                isSignedIn = state.isSignedIn,
                 sellerReviews = state.reviews.filter { it.sellerId == prod.sellerId },
                 sponsoredAds = state.sponsoredAds,
                 adConfig = state.adConfig,
@@ -459,15 +471,84 @@ fun HatchMarketplaceRoot(
                 onMarkSold = { viewModel.requestMarkSold(prod) },
                 onOpenReview = { viewModel.openReviewModal(it) },
                 onOpenReport = { viewModel.openReportModal(it) },
+                onOpenBusinessProfile = { sellerId ->
+                    viewModel.closeProductDetail()
+                    viewModel.openBusinessProfile(sellerId)
+                },
                 onAdImpression = { viewModel.recordAdImpression(it) },
                 onAdClick = { viewModel.recordAdClick(it.id) },
                 onCopiedToast = { viewModel.showToast(it, ToastType.SUCCESS) }
             )
         }
 
+        state.selectedBusinessSellerId?.let { sellerId ->
+            val sellerUser = state.directoryUsers.firstOrNull { it.uid == sellerId }
+            val sellerProducts = MarketplaceLogic.buildBusinessStorefrontProducts(state.products, sellerId)
+            BusinessProfileModal(
+                sellerId = sellerId,
+                sellerUser = sellerUser,
+                sellerProducts = sellerProducts,
+                favoriteIds = state.favoriteIds,
+                sellerReviews = state.reviews.filter { it.sellerId == sellerId },
+                isOwnProfile = state.auth.firebaseUser?.uid == sellerId,
+                isSignedIn = state.isSignedIn,
+                language = state.language,
+                strings = strings,
+                onDismiss = { viewModel.closeBusinessProfile() },
+                onOpenProduct = { prod ->
+                    viewModel.closeBusinessProfile()
+                    viewModel.openProductDetail(prod)
+                },
+                onToggleFavorite = { viewModel.toggleFavorite(it) },
+                onStartChatWithProduct = { prod ->
+                    viewModel.closeBusinessProfile()
+                    viewModel.startChatWithSeller(prod)
+                },
+                onEditOwnProfile = {
+                    viewModel.closeBusinessProfile()
+                    viewModel.openEditProfile()
+                },
+                onGuestContactPrompt = {
+                    viewModel.requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
+                }
+            )
+        }
+
+        state.commercialDirectoryType?.let { dirType ->
+            val directoryEntries = remember(
+                state.allUsers,
+                state.commercialProfiles,
+                state.currentUser,
+                state.products,
+                dirType
+            ) {
+                MarketplaceLogic.buildCommercialDirectory(
+                    users = state.directoryUsers,
+                    products = state.products,
+                    targetType = dirType
+                )
+            }
+            CommercialDirectoryModal(
+                accountType = dirType,
+                entries = directoryEntries,
+                language = state.language,
+                strings = strings,
+                onDismiss = { viewModel.closeCommercialDirectory() },
+                onSelectSeller = { sellerId ->
+                    viewModel.closeCommercialDirectory()
+                    viewModel.openBusinessProfile(sellerId)
+                },
+                onOpenProduct = { prod ->
+                    viewModel.closeCommercialDirectory()
+                    viewModel.openProductDetail(prod)
+                }
+            )
+        }
+
         if (state.showSellModal) {
             SellModal(
                 defaultCity = state.currentUser?.city.orEmpty(),
+                currentUser = state.currentUser,
                 isSubmitting = state.isSubmitting,
                 language = state.language,
                 strings = strings,
@@ -524,8 +605,17 @@ fun HatchMarketplaceRoot(
                 onClearAuthError = { viewModel.clearAuthError() },
                 onDismiss = { viewModel.closeAuthSheet() },
                 onGoogleSignInClick = { launchGoogleSignIn() },
-                onCompleteOnboarding = { name, phone, city, avatar, avatarUri ->
-                    viewModel.saveOnboardingProfile(name, phone, city, avatar, avatarUri)
+                onCompleteOnboarding = { name, phone, city, avatar, avatarUri, accountType, businessActivity, businessLogo ->
+                    viewModel.saveOnboardingProfile(
+                        name = name,
+                        phone = phone,
+                        city = city,
+                        avatar = avatar,
+                        avatarUri = avatarUri,
+                        accountType = accountType,
+                        businessActivity = businessActivity,
+                        businessLogo = businessLogo
+                    )
                 }
             )
         }
@@ -536,9 +626,19 @@ fun HatchMarketplaceRoot(
                 currentPhone = state.auth.privateProfile?.phone.orEmpty(),
                 isSubmitting = state.isSubmitting,
                 language = state.language,
+                strings = strings,
                 onDismiss = { viewModel.closeEditProfile() },
-                onSave = { name, phone, city, avatar, avatarUri ->
-                    viewModel.updateProfile(name, phone, city, avatar, avatarUri)
+                onSave = { name, phone, city, avatar, avatarUri, accountType, businessActivity, businessLogo ->
+                    viewModel.updateProfile(
+                        name = name,
+                        phone = phone,
+                        city = city,
+                        avatar = avatar,
+                        avatarUri = avatarUri,
+                        accountType = accountType,
+                        businessActivity = businessActivity,
+                        businessLogo = businessLogo
+                    )
                 }
             )
         }
@@ -626,6 +726,19 @@ fun HatchMarketplaceRoot(
                         if (state.language == AppLanguage.AR) "طلب عربون مخالف عبر المحادثة ($sellerName)" else "Upfront deposit scam warning ($sellerName)"
                     )
                 }
+            )
+        }
+
+        state.guestPromptReason?.let { reason ->
+            GuestAuthPromptDialog(
+                reason = reason,
+                language = state.language,
+                strings = strings,
+                onContinueWithGoogle = {
+                    viewModel.dismissGuestPrompt()
+                    launchGoogleSignIn()
+                },
+                onDismiss = { viewModel.dismissGuestPrompt() }
             )
         }
     }

@@ -1,17 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  Pencil, 
-  MapPin, 
-  Phone, 
-  User as UserIcon, 
-  Camera, 
-  Check, 
-  ShieldCheck, 
-  Sparkles 
+import {
+  X,
+  Pencil,
+  MapPin,
+  Phone,
+  User as UserIcon,
+  Camera,
+  Check,
+  ShieldCheck,
+  Sparkles,
+  Store,
+  Building2,
+  ArrowUpCircle,
+  Link2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { SUDANESE_CITIES, SudaneseCity } from '../types';
+import { AccountType, resolveAccountType, SUDANESE_CITIES, SudaneseCity } from '../types';
 
 const AVATAR_PRESETS = [
   { id: '1', url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80', label: 'افتراضي' },
@@ -21,29 +25,44 @@ const AVATAR_PRESETS = [
   { id: '5', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80', label: 'عصري' },
 ];
 
+const COMMERCIAL_LOGO_PRESETS = [
+  { id: 'c1', url: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?auto=format&fit=crop&w=256&q=80', label: 'متجر' },
+  { id: 'c2', url: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=256&q=80', label: 'شركة' },
+  { id: 'c3', url: 'https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&w=256&q=80', label: 'تقنية' },
+  { id: 'c4', url: 'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=256&q=80', label: 'طاقة' },
+  { id: 'c5', url: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=256&q=80', label: 'أزياء' },
+];
+
 export const EditProfileModal: React.FC = () => {
-  const { 
-    currentUser, 
-    isEditProfileOpen, 
-    setIsEditProfileOpen, 
-    updateCurrentUser, 
-    t, 
-    language 
+  const {
+    currentUser,
+    isEditProfileOpen,
+    setIsEditProfileOpen,
+    updateCurrentUser,
+    t,
+    language,
   } = useApp();
 
+  const initialType = resolveAccountType(currentUser.accountType);
+
+  const [accountType, setAccountType] = useState<AccountType>(initialType);
   const [name, setName] = useState(currentUser.name);
+  const [businessActivity, setBusinessActivity] = useState(currentUser.businessActivity || '');
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState<SudaneseCity>(currentUser.city);
-  const [selectedAvatar, setSelectedAvatar] = useState(currentUser.avatar);
+  const [selectedAvatar, setSelectedAvatar] = useState(currentUser.businessLogo || currentUser.avatar);
   const [customAvatar, setCustomAvatar] = useState('');
+  const [logoUrlInput, setLogoUrlInput] = useState('');
   const [error, setError] = useState('');
 
-  // Extract phone number without +249 for editing
   useEffect(() => {
     if (currentUser) {
+      const resolved = resolveAccountType(currentUser.accountType);
+      setAccountType(resolved);
       setName(currentUser.name);
+      setBusinessActivity(currentUser.businessActivity || '');
       setCity(currentUser.city);
-      setSelectedAvatar(currentUser.avatar);
+      setSelectedAvatar(currentUser.businessLogo || currentUser.avatar);
 
       let clean = currentUser.phone.replace(/[^0-9]/g, '');
       if (clean.startsWith('249')) {
@@ -54,18 +73,47 @@ export const EditProfileModal: React.FC = () => {
       }
       setPhone(clean);
       setCustomAvatar('');
+      setLogoUrlInput('');
       setError('');
     }
   }, [currentUser, isEditProfileOpen]);
 
   if (!isEditProfileOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const currentType = resolveAccountType(currentUser.accountType);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) {
-      setError(language === 'ar' ? 'يرجى كتابة الاسم الكامل' : 'Please enter your full name');
+    if (!name.trim() || name.trim().length < 2) {
+      setError(
+        accountType === 'store'
+          ? language === 'ar'
+            ? 'يرجى كتابة اسم المتجر'
+            : 'Please enter store name'
+          : accountType === 'company'
+          ? language === 'ar'
+            ? 'يرجى كتابة اسم الشركة'
+            : 'Please enter company name'
+          : language === 'ar'
+          ? 'يرجى كتابة الاسم الكامل'
+          : 'Please enter your full name'
+      );
       return;
     }
+
+    if ((accountType === 'store' || accountType === 'company') && !businessActivity.trim()) {
+      setError(
+        accountType === 'store'
+          ? language === 'ar'
+            ? 'يرجى إدخال نوع نشاط المتجر'
+            : 'Please enter store activity type'
+          : language === 'ar'
+          ? 'يرجى إدخال مجال عمل الشركة'
+          : 'Please enter company business field'
+      );
+      return;
+    }
+
     if (!phone.trim()) {
       setError(language === 'ar' ? 'يرجى إدخال رقم الهاتف' : 'Please enter your phone number');
       return;
@@ -80,17 +128,25 @@ export const EditProfileModal: React.FC = () => {
     }
 
     if (cleanDigits.length < 8) {
-      setError(language === 'ar' ? 'يرجى إدخال رقم هاتف سوداني صحيح' : 'Please enter a valid phone number');
+      setError(
+        language === 'ar'
+          ? 'يرجى إدخال رقم هاتف سوداني صحيح'
+          : 'Please enter a valid phone number'
+      );
       return;
     }
 
     const fullPhoneNumber = `+249 ${cleanDigits}`;
+    const chosenImage = logoUrlInput.trim() || customAvatar.trim() || selectedAvatar;
 
-    updateCurrentUser({
+    await updateCurrentUser({
       name: name.trim(),
       phone: fullPhoneNumber,
       city,
-      avatar: customAvatar.trim() || selectedAvatar,
+      avatar: chosenImage,
+      accountType,
+      businessActivity: accountType === 'personal' ? undefined : businessActivity.trim(),
+      businessLogo: accountType === 'personal' ? undefined : chosenImage,
     });
   };
 
@@ -101,16 +157,18 @@ export const EditProfileModal: React.FC = () => {
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
           setCustomAvatar(reader.result);
+          setLogoUrlInput('');
         }
       };
       reader.readAsDataURL(file);
     }
   };
 
+  const activePresets = accountType === 'personal' ? AVATAR_PRESETS : COMMERCIAL_LOGO_PRESETS;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-neutral-950/85 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-lg bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl p-5 sm:p-7 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
-        {/* Glow ambient accent */}
+      <div className="relative w-full max-w-lg bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl p-5 sm:p-7 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200 max-h-[94vh] overflow-y-auto no-scrollbar">
         <div className="absolute top-0 end-0 w-44 h-44 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute bottom-0 start-0 w-44 h-44 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
 
@@ -123,7 +181,13 @@ export const EditProfileModal: React.FC = () => {
             <div>
               <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[10px] font-bold mb-1">
                 <Sparkles className="w-3 h-3 text-amber-400" />
-                <span>{language === 'ar' ? 'إدارة الحساب' : 'Account Settings'}</span>
+                <span>
+                  {accountType === 'store'
+                    ? `🏪 ${t.accountTypeStore}`
+                    : accountType === 'company'
+                    ? `🏢 ${t.accountTypeCompany}`
+                    : `👤 ${t.accountTypePersonal}`}
+                </span>
               </div>
               <h3 className="font-black text-lg sm:text-xl text-white">
                 {t.editProfile}
@@ -143,7 +207,6 @@ export const EditProfileModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Form Body */}
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
           {error && (
             <div className="p-3 rounded-2xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-xs font-semibold flex items-center gap-2">
@@ -152,14 +215,67 @@ export const EditProfileModal: React.FC = () => {
             </div>
           )}
 
-          {/* Full Name */}
+          {/* Account Type Upgrade Selector for personal accounts (or type management) */}
+          {currentType === 'personal' && (
+            <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-500/10 via-neutral-950 to-neutral-950 border border-amber-500/30 space-y-2.5">
+              <div className="flex items-center gap-2 text-xs font-black text-amber-300">
+                <ArrowUpCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>{t.upgradeAccountTitle}</span>
+              </div>
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                {t.upgradeAccountDesc}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {(
+                  [
+                    { id: 'personal' as AccountType, label: t.commercialBadgePersonal, emoji: '👤' },
+                    { id: 'store' as AccountType, label: t.commercialBadgeStore, emoji: '🏪' },
+                    { id: 'company' as AccountType, label: t.commercialBadgeCompany, emoji: '🏢' },
+                  ]
+                ).map((opt) => {
+                  const selected = accountType === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setAccountType(opt.id);
+                        setError('');
+                      }}
+                      className={`py-2 px-2 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        selected
+                          ? 'bg-amber-500 text-neutral-950 border-amber-300 shadow-md'
+                          : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-600'
+                      }`}
+                    >
+                      <span>{opt.emoji}</span>
+                      <span>{opt.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Name / Store Name / Company Name */}
           <div>
             <label className="block text-xs font-bold text-neutral-300 mb-1.5">
-              {t.fullNameLabel} <span className="text-amber-400">*</span>
+              {accountType === 'store'
+                ? t.storeNameLabel
+                : accountType === 'company'
+                ? t.companyNameLabel
+                : t.fullNameLabel}{' '}
+              <span className="text-amber-400">*</span>
             </label>
             <div className="relative">
               <div className="absolute inset-y-0 start-0 ps-3.5 flex items-center pointer-events-none text-neutral-500">
-                <UserIcon className="w-4 h-4" />
+                {accountType === 'store' ? (
+                  <Store className="w-4 h-4" />
+                ) : accountType === 'company' ? (
+                  <Building2 className="w-4 h-4" />
+                ) : (
+                  <UserIcon className="w-4 h-4" />
+                )}
               </div>
               <input
                 type="text"
@@ -168,20 +284,55 @@ export const EditProfileModal: React.FC = () => {
                   setName(e.target.value);
                   if (error) setError('');
                 }}
-                placeholder={t.fullNamePlaceholder}
+                placeholder={
+                  accountType === 'store'
+                    ? t.storeNamePlaceholder
+                    : accountType === 'company'
+                    ? t.companyNamePlaceholder
+                    : t.fullNamePlaceholder
+                }
                 className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded-2xl ps-10 pe-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none transition-all shadow-inner"
               />
             </div>
           </div>
 
-          {/* Phone Number with Sudan Dial Code (+249) */}
+          {/* Commercial Activity / Field */}
+          {(accountType === 'store' || accountType === 'company') && (
+            <div>
+              <label className="block text-xs font-bold text-neutral-300 mb-1.5">
+                {accountType === 'store' ? t.storeActivityLabel : t.companyFieldLabel}{' '}
+                <span className="text-amber-400">*</span>
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 start-0 ps-3.5 flex items-center pointer-events-none text-neutral-500">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  value={businessActivity}
+                  onChange={(e) => {
+                    setBusinessActivity(e.target.value);
+                    if (error) setError('');
+                  }}
+                  placeholder={
+                    accountType === 'store'
+                      ? t.storeActivityPlaceholder
+                      : t.companyFieldPlaceholder
+                  }
+                  maxLength={120}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded-2xl ps-10 pe-4 py-3 text-sm text-white placeholder-neutral-500 focus:outline-none transition-all shadow-inner"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Phone Number */}
           <div>
             <label className="block text-xs font-bold text-neutral-300 mb-1.5">
               {t.phoneLabel} <span className="text-amber-400">*</span>
             </label>
             <div className="flex items-center gap-2">
-              {/* Sudan Country Code Badge */}
-              <div 
+              <div
                 className="flex items-center gap-1.5 px-3 py-3 rounded-2xl bg-neutral-950 border border-neutral-800 text-amber-400 font-mono font-bold text-sm shrink-0 select-none shadow-inner"
                 title={language === 'ar' ? 'مفتاح جمهورية السودان (+249)' : 'Sudan dial code (+249)'}
               >
@@ -189,7 +340,6 @@ export const EditProfileModal: React.FC = () => {
                 <span dir="ltr">+249</span>
               </div>
 
-              {/* Phone Input */}
               <div className="relative flex-1">
                 <div className="absolute inset-y-0 start-0 ps-3.5 flex items-center pointer-events-none text-neutral-500">
                   <Phone className="w-4 h-4" />
@@ -209,11 +359,6 @@ export const EditProfileModal: React.FC = () => {
                 />
               </div>
             </div>
-            <p className="text-[10px] text-neutral-500 mt-1">
-              {language === 'ar' 
-                ? 'أدخل رقم الهاتف (مثال: 912345678 أو 123456789)' 
-                : 'Enter phone number (e.g. 912345678 or 123456789)'}
-            </p>
           </div>
 
           {/* City / State */}
@@ -239,14 +384,18 @@ export const EditProfileModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Choose Avatar */}
+          {/* Choose Avatar or Store/Company Logo */}
           <div>
             <label className="block text-xs font-bold text-neutral-300 mb-2">
-              {t.chooseAvatar}
+              {accountType === 'store'
+                ? t.storeLogoLabel
+                : accountType === 'company'
+                ? t.companyLogoLabel
+                : t.chooseAvatar}
             </label>
             <div className="flex items-center gap-3 overflow-x-auto pb-1 no-scrollbar">
-              {AVATAR_PRESETS.map((preset) => {
-                const isSelected = !customAvatar && selectedAvatar === preset.url;
+              {activePresets.map((preset) => {
+                const isSelected = !customAvatar && !logoUrlInput && selectedAvatar === preset.url;
                 return (
                   <button
                     key={preset.id}
@@ -254,18 +403,17 @@ export const EditProfileModal: React.FC = () => {
                     onClick={() => {
                       setSelectedAvatar(preset.url);
                       setCustomAvatar('');
+                      setLogoUrlInput('');
                     }}
-                    className={`relative w-12 h-12 rounded-full overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
-                      isSelected 
-                        ? 'border-amber-400 ring-4 ring-amber-400/25 scale-105' 
+                    className={`relative w-12 h-12 ${
+                      accountType === 'personal' ? 'rounded-full' : 'rounded-2xl'
+                    } overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
+                      isSelected
+                        ? 'border-amber-400 ring-4 ring-amber-400/25 scale-105'
                         : 'border-neutral-700 opacity-70 hover:opacity-100 hover:border-neutral-500'
                     }`}
                   >
-                    <img 
-                      src={preset.url} 
-                      alt={preset.label}
-                      className="w-full h-full object-cover" 
-                    />
+                    <img src={preset.url} alt={preset.label} className="w-full h-full object-cover" />
                     {isSelected && (
                       <div className="absolute inset-0 bg-amber-500/20 flex items-center justify-center">
                         <Check className="w-4 h-4 text-amber-300 stroke-[3]" />
@@ -275,28 +423,53 @@ export const EditProfileModal: React.FC = () => {
                 );
               })}
 
-              {/* Upload Custom Avatar Button */}
-              <label 
-                className={`relative w-12 h-12 rounded-full border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all shrink-0 ${
-                  customAvatar 
-                    ? 'border-amber-400 ring-4 ring-amber-400/25' 
+              <label
+                className={`relative w-12 h-12 ${
+                  accountType === 'personal' ? 'rounded-full' : 'rounded-2xl'
+                } border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-all shrink-0 ${
+                  customAvatar
+                    ? 'border-amber-400 ring-4 ring-amber-400/25'
                     : 'border-neutral-700 hover:border-amber-400/70 bg-neutral-950/60'
                 }`}
-                title={language === 'ar' ? 'رفع صورتك الخاصة' : 'Upload photo'}
+                title={language === 'ar' ? 'رفع صورة من جهازك' : 'Upload photo'}
               >
                 {customAvatar ? (
-                  <img src={customAvatar} alt="Custom" className="w-full h-full rounded-full object-cover" />
+                  <img
+                    src={customAvatar}
+                    alt="Custom"
+                    className={`w-full h-full ${
+                      accountType === 'personal' ? 'rounded-full' : 'rounded-2xl'
+                    } object-cover`}
+                  />
                 ) : (
                   <Camera className="w-4 h-4 text-neutral-400 hover:text-amber-400" />
                 )}
-                <input 
-                  type="file" 
-                  accept="image/*" 
-                  onChange={handleImageUpload} 
-                  className="hidden" 
-                />
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
               </label>
             </div>
+
+            {(accountType === 'store' || accountType === 'company') && (
+              <div className="relative mt-2">
+                <div className="absolute inset-y-0 start-0 ps-3 flex items-center pointer-events-none text-neutral-500">
+                  <Link2 className="w-3.5 h-3.5" />
+                </div>
+                <input
+                  type="url"
+                  value={logoUrlInput}
+                  onChange={(e) => {
+                    setLogoUrlInput(e.target.value);
+                    if (e.target.value) setCustomAvatar('');
+                  }}
+                  placeholder={
+                    language === 'ar'
+                      ? 'أو أدخل رابط الشعار (HTTPS) اختياري'
+                      : 'Or paste logo HTTPS URL (optional)'
+                  }
+                  dir="ltr"
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-400 rounded-xl ps-9 pe-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none text-left"
+                />
+              </div>
+            )}
           </div>
 
           {/* Account Status Safeguard Notice */}
@@ -304,8 +477,8 @@ export const EditProfileModal: React.FC = () => {
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>
               {language === 'ar'
-                ? 'يتم الاحتفاظ بسجل صفقاتك المكتملة وتقييم ثقتك بدون أي تغيير عند تحديث البيانات.'
-                : 'Your completed deals count and trust score are securely preserved.'}
+                ? 'يتم الاحتفاظ بجميع منتجاتك وصفقاتك ومحادثاتك وتقييم ثقتك على نفس الحساب دون أي فقدان.'
+                : 'All your products, deals, conversations, and trust rating are preserved under your same account.'}
             </span>
           </div>
 

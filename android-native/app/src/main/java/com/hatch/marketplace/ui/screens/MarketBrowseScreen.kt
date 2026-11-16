@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,11 +27,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -45,6 +48,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -62,8 +66,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AdMobConfig
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.CategoryId
@@ -88,6 +95,7 @@ import com.hatch.marketplace.ui.theme.HatchSurfaceDark
 import com.hatch.marketplace.ui.theme.HatchTextMuted
 import com.hatch.marketplace.ui.theme.HatchTextPrimary
 import com.hatch.marketplace.ui.theme.HatchTextSecondary
+import com.hatch.marketplace.ui.theme.HatchTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,7 +120,9 @@ fun MarketBrowseScreen(
     onToggleFavorite: (String) -> Unit,
     onOpenAuth: () -> Unit,
     onAdImpression: (String) -> Unit,
-    onAdClick: (SponsoredAdItem) -> Unit
+    onAdClick: (SponsoredAdItem) -> Unit,
+    onOpenStoresDirectory: () -> Unit = {},
+    onOpenCompaniesDirectory: () -> Unit = {}
 ) {
     var showFilterSheet by remember { mutableStateOf(false) }
     var searchFocused by remember { mutableStateOf(false) }
@@ -288,8 +298,33 @@ fun MarketBrowseScreen(
                 }
             }
 
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CommercialDirectoryButton(
+                    label = strings.storesButtonLabel,
+                    icon = Icons.Rounded.Storefront,
+                    onClick = onOpenStoresDirectory
+                )
+                CommercialDirectoryButton(
+                    label = strings.companiesButtonLabel,
+                    icon = Icons.Rounded.Business,
+                    onClick = onOpenCompaniesDirectory
+                )
+            }
+
             if (products.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
                             text = if (language == AppLanguage.AR) "لا توجد منتجات مطابقة للفلاتر الحالية" else "No listings match your filters",
@@ -312,7 +347,9 @@ fun MarketBrowseScreen(
                     contentPadding = PaddingValues(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
                 ) {
                     products.forEachIndexed { idx, product ->
                         item(key = "prod_${product.id}") {
@@ -446,6 +483,40 @@ private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
+private fun CommercialDirectoryButton(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .defaultMinSize(minWidth = 128.dp, minHeight = 42.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(HatchCardElevated)
+            .border(1.dp, HatchAmber500.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 18.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp, Alignment.CenterHorizontally)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = HatchAmber400,
+            modifier = Modifier.size(18.dp)
+        )
+        Text(
+            text = label,
+            color = HatchTextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 private fun FilterCheckboxRow(
     label: String,
     checked: Boolean,
@@ -480,5 +551,64 @@ private fun FilterCheckboxRow(
             Text(label, color = labelColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
         }
         Checkbox(checked = checked, onCheckedChange = onCheckedChange, colors = CheckboxDefaults.colors(checkedColor = HatchAmber500, checkmarkColor = HatchBgDark))
+    }
+}
+
+@Preview(showBackground = true, backgroundColor = 0xFF0A0A0A, widthDp = 412, heightDp = 892)
+@Composable
+private fun MarketBrowseScreenPreview() {
+    val strings = HatchStrings.forLanguage(AppLanguage.AR)
+    val sampleProducts = listOf(
+        Product(
+            id = "prev_1",
+            titleAr = "آيفون 15 برو ماكس",
+            price = 4_500_000.0,
+            category = CategoryId.PHONES.wireValue,
+            city = "الخرطوم (ولاية الخرطوم)",
+            sellerId = "store_1",
+            sellerName = "متجر النيل للهواتف",
+            sellerAccountType = AccountType.STORE.wireValue,
+            sellerVerified = true
+        ),
+        Product(
+            id = "prev_2",
+            titleAr = "منظومة طاقة شمسية 5 كيلوواط",
+            price = 7_200_000.0,
+            category = CategoryId.SOLAR_ENERGY.wireValue,
+            city = "بورتسودان (ولاية البحر الأحمر)",
+            sellerId = "comp_1",
+            sellerName = "شركة البحر الأحمر للطاقة",
+            sellerAccountType = AccountType.COMPANY.wireValue,
+            sellerVerified = true
+        )
+    )
+    HatchTheme(language = AppLanguage.AR) {
+        Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
+            MarketBrowseScreen(
+                products = sampleProducts,
+                favoriteIds = emptySet(),
+                filter = MarketFilterState(),
+                searchHistory = emptyList(),
+                sponsoredAds = emptyList(),
+                adConfig = AdMobConfig(isEnabled = false),
+                isSignedIn = false,
+                isRefreshing = false,
+                language = AppLanguage.AR,
+                strings = strings,
+                onRefresh = {},
+                onUpdateFilter = {},
+                onSelectCity = {},
+                onCommitSearch = {},
+                onRemoveSearchHistory = {},
+                onClearSearchHistory = {},
+                onOpenProduct = {},
+                onToggleFavorite = {},
+                onOpenAuth = {},
+                onAdImpression = {},
+                onAdClick = {},
+                onOpenStoresDirectory = {},
+                onOpenCompaniesDirectory = {}
+            )
+        }
     }
 }

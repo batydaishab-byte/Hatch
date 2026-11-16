@@ -33,7 +33,7 @@ service cloud.firestore {
     // 3. Entity Validators (No existing()/diff() inside create/update helpers)
     function isValidPublicUser(data) {
       return data.keys().hasAll(['uid', 'name', 'city', 'rating', 'dealsCompleted', 'verifiedIdentity', 'status', 'joinedDate', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'suspendedUntil', 'suspensionDays', 'suspensionReason', 'joinedDate', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'suspendedUntil', 'suspensionDays', 'suspensionReason', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
         && isValidId(data.uid)
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
@@ -46,6 +46,28 @@ service cloud.firestore {
         && (!('suspendedUntil' in data) || (data.suspendedUntil is string && data.suspendedUntil.size() <= 64))
         && (!('suspensionDays' in data) || (data.suspensionDays is int && data.suspensionDays >= 0 && data.suspensionDays <= 3650))
         && (!('suspensionReason' in data) || (data.suspensionReason is string && data.suspensionReason.size() <= 500))
+        && (!('accountType' in data) || data.accountType in ['personal', 'store', 'company'])
+        && (!('businessActivity' in data) || (data.businessActivity is string && data.businessActivity.size() <= 120))
+        && (!('businessLogo' in data) || (data.businessLogo is string && data.businessLogo.size() <= 1000))
+        && data.joinedDate is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCommercialProfile(data) {
+      return data.keys().hasAll(['uid', 'name', 'city', 'rating', 'dealsCompleted', 'verifiedIdentity', 'status', 'accountType', 'joinedDate', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 100
+        && data.rating is number && data.rating >= 0 && data.rating <= 5
+        && data.dealsCompleted is int && data.dealsCompleted >= 0
+        && (!('reportsCount' in data) || (data.reportsCount is int && data.reportsCount >= 0))
+        && data.verifiedIdentity is bool
+        && data.status in ['active', 'suspended']
+        && data.accountType in ['store', 'company']
+        && (!('businessActivity' in data) || (data.businessActivity is string && data.businessActivity.size() <= 120))
+        && (!('businessLogo' in data) || (data.businessLogo is string && data.businessLogo.size() <= 1000))
         && data.joinedDate is timestamp
         && data.updatedAt is timestamp;
     }
@@ -65,7 +87,7 @@ service cloud.firestore {
 
     function isValidProduct(data) {
       return data.keys().hasAll(['id', 'titleAr', 'descriptionAr', 'price', 'category', 'condition', 'city', 'images', 'sellerId', 'sellerName', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerId', 'sellerName', 'sellerAvatar', 'sellerRating', 'sellerDealsCount', 'sellerVerified', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerId', 'sellerName', 'sellerAvatar', 'sellerRating', 'sellerDealsCount', 'sellerVerified', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 120
         && (!('titleEn' in data) || (data.titleEn is string && data.titleEn.size() <= 120))
@@ -86,6 +108,8 @@ service cloud.firestore {
         && (!('sellerRating' in data) || (data.sellerRating is number && data.sellerRating >= 0 && data.sellerRating <= 5))
         && (!('sellerDealsCount' in data) || (data.sellerDealsCount is int && data.sellerDealsCount >= 0))
         && (!('sellerVerified' in data) || data.sellerVerified is bool)
+        && (!('sellerAccountType' in data) || data.sellerAccountType in ['personal', 'store', 'company'])
+        && (!('sellerBusinessActivity' in data) || (data.sellerBusinessActivity is string && data.sellerBusinessActivity.size() <= 120))
         && data.paymentMethods is list && data.paymentMethods.size() >= 1 && data.paymentMethods.size() <= 4 && data.paymentMethods.hasOnly(['bankak', 'fawry', 'cash', 'ocash'])
         && data.negotiable is bool
         && data.deliveryAvailable is bool
@@ -280,7 +304,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'updatedAt'])) ||
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])) ||
           (
             isOwner(userId)
             && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'verifiedIdentity', 'updatedAt'])
@@ -289,6 +313,49 @@ service cloud.firestore {
           )
         );
       allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Public Store & Company Directory Profiles (Zero PII, Guest-readable)
+    match /commercial_profiles/{profileId} {
+      allow get: if isValidId(profileId) && (isOwner(profileId) || isAdmin() || (resource != null && existing().status == 'active' && existing().accountType in ['store', 'company']));
+      allow list: if (existing().status == 'active' && existing().accountType in ['store', 'company']) || isVerifiedAdminEmail();
+      allow create: if isValidId(profileId)
+        && isOwner(profileId)
+        && isValidCommercialProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().updatedAt == request.time
+        && (
+          (
+            incoming().status == 'active'
+            && incoming().verifiedIdentity == false
+            && incoming().dealsCompleted == 0
+            && incoming().joinedDate == request.time
+          ) ||
+          (
+            exists(/databases/$(database)/documents/users_public/$(profileId))
+            && incoming().status == get(/databases/$(database)/documents/users_public/$(profileId)).data.status
+            && incoming().verifiedIdentity == get(/databases/$(database)/documents/users_public/$(profileId)).data.verifiedIdentity
+            && incoming().dealsCompleted == get(/databases/$(database)/documents/users_public/$(profileId)).data.dealsCompleted
+            && incoming().joinedDate == get(/databases/$(database)/documents/users_public/$(profileId)).data.joinedDate
+          )
+        );
+      allow update: if isValidId(profileId)
+        && isSignedIn()
+        && isValidCommercialProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().joinedDate == existing().joinedDate
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(profileId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])) ||
+          (
+            isOwner(profileId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'verifiedIdentity', 'updatedAt'])
+            && incoming().dealsCompleted == existing().dealsCompleted + 1
+            && incoming().verifiedIdentity == (incoming().dealsCompleted >= 10 && (!('reportsCount' in existing()) || existing().reportsCount == 0))
+          )
+        );
+      allow delete: if isValidId(profileId) && (isOwner(profileId) || isAdmin());
     }
 
     // Private User PII & Subcollections
@@ -393,7 +460,7 @@ service cloud.firestore {
             isOwner(existing().sellerId)
             && existing().status != 'sold'
             && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'updatedAt']) ||
+              incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerName', 'sellerAvatar', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'updatedAt']) ||
               (incoming().status == 'sold' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
             )
           ) ||

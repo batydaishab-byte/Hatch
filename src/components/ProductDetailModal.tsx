@@ -22,10 +22,14 @@ import {
   MessageCircle,
   Send,
   CheckCircle2,
-  Star
+  Star,
+  Store,
+  Building2,
+  ExternalLink
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { AdMobBanner } from './AdMobBanner';
+import { resolveAccountType } from '../types';
 
 export const ProductDetailModal: React.FC = () => {
   const { 
@@ -38,6 +42,7 @@ export const ProductDetailModal: React.FC = () => {
     flagProduct, 
     openReportModal,
     openReviewModal,
+    openBusinessProfile,
     getSellerReviews,
     showToast, 
     availableUsers,
@@ -76,12 +81,27 @@ export const ProductDetailModal: React.FC = () => {
   };
 
   const sellerName = product.sellerName || seller.name || (language === 'ar' ? 'ياسر بابكر' : 'Verified Seller');
-  const sellerAvatar = product.sellerAvatar || seller.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80';
+  const sellerAvatar =
+    ('businessLogo' in seller && seller.businessLogo) ||
+    product.sellerAvatar ||
+    seller.avatar ||
+    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80';
+  const sellerAccountType = resolveAccountType(
+    ('accountType' in seller && seller.accountType) || product.sellerAccountType
+  );
+  const sellerBusinessActivity =
+    ('businessActivity' in seller && seller.businessActivity) || product.sellerBusinessActivity;
+  const isCommercialSeller = sellerAccountType === 'store' || sellerAccountType === 'company';
   const isSellerVerified = product.sellerVerified !== undefined ? product.sellerVerified : (seller.verifiedIdentity ?? true);
   const sellerPhone = product.sellerPhone || seller.phone || '+249 91 234 5678';
   const sellerRating = product.sellerRating || seller.rating || 4.9;
   const sellerDeals = product.sellerDealsCount || seller.dealsCompleted || 14;
   const sellerReviews = getSellerReviews(product.sellerId);
+
+  const handleOpenCommercialPage = () => {
+    setSelectedProductForDetail(null);
+    openBusinessProfile(product.sellerId);
+  };
 
   const handleOpenRating = () => {
     openReviewModal({
@@ -158,14 +178,22 @@ export const ProductDetailModal: React.FC = () => {
           {/* Top Seller Quick Chip */}
           <button
             type="button"
-            onClick={handleOpenRating}
+            onClick={isCommercialSeller ? handleOpenCommercialPage : handleOpenRating}
             className="flex items-center gap-2 bg-neutral-950/85 hover:bg-neutral-900 border border-white/20 backdrop-blur-md py-1 px-3 rounded-full pointer-events-auto shadow-lg max-w-[200px] sm:max-w-[280px] transition-all cursor-pointer active:scale-95"
-            title={language === 'ar' ? 'اضغط لتقييم البائع وعرض التقييمات' : 'Click to rate seller and view ratings'}
+            title={
+              isCommercialSeller
+                ? sellerAccountType === 'company'
+                  ? t.viewCompanyPage
+                  : t.viewStorePage
+                : language === 'ar'
+                ? 'اضغط لتقييم البائع وعرض التقييمات'
+                : 'Click to rate seller and view ratings'
+            }
           >
             <img
               src={sellerAvatar}
               alt={sellerName}
-              className="w-6 h-6 rounded-full object-cover ring-1 ring-amber-400 shrink-0"
+              className={`w-6 h-6 ${isCommercialSeller ? 'rounded-lg' : 'rounded-full'} object-cover ring-1 ring-amber-400 shrink-0`}
             />
             <span className="text-xs font-bold text-white truncate">
               {sellerName}
@@ -255,20 +283,70 @@ export const ProductDetailModal: React.FC = () => {
             {/* PROMINENT SELLER IDENTITY & VERIFICATION CARD (Visible immediately upon opening) */}
             <div className="p-4 rounded-2xl bg-neutral-950/90 border-2 border-emerald-500/30 shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3.5">
-                <div className="relative shrink-0">
-                  <img
-                    src={sellerAvatar}
-                    alt={sellerName}
-                    className="w-13 h-13 rounded-2xl object-cover ring-2 ring-amber-400 shadow-md"
-                  />
-                  <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-neutral-950" title="نشط الآن" />
-                </div>
+                {isCommercialSeller ? (
+                  <button
+                    type="button"
+                    onClick={handleOpenCommercialPage}
+                    className="relative shrink-0 cursor-pointer group"
+                    title={sellerAccountType === 'company' ? t.viewCompanyPage : t.viewStorePage}
+                  >
+                    <img
+                      src={sellerAvatar}
+                      alt={sellerName}
+                      className="w-13 h-13 rounded-2xl object-cover ring-2 ring-amber-400 shadow-md group-hover:scale-105 transition-transform"
+                    />
+                    <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-neutral-950" title="نشط الآن" />
+                  </button>
+                ) : (
+                  <div className="relative shrink-0">
+                    <img
+                      src={sellerAvatar}
+                      alt={sellerName}
+                      className="w-13 h-13 rounded-2xl object-cover ring-2 ring-amber-400 shadow-md"
+                    />
+                    <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-neutral-950" title="نشط الآن" />
+                  </div>
+                )}
 
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-black text-base sm:text-lg text-white">
-                      {sellerName}
-                    </span>
+                    {isCommercialSeller ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenCommercialPage}
+                        className="font-black text-base sm:text-lg text-white hover:text-amber-300 transition-colors cursor-pointer inline-flex items-center gap-1.5 text-start"
+                      >
+                        <span>{sellerName}</span>
+                        <ExternalLink className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      </button>
+                    ) : (
+                      <span className="font-black text-base sm:text-lg text-white">
+                        {sellerName}
+                      </span>
+                    )}
+
+                    {sellerAccountType === 'store' && (
+                      <button
+                        type="button"
+                        onClick={handleOpenCommercialPage}
+                        className="inline-flex items-center gap-1 text-[11px] font-black bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full cursor-pointer hover:bg-emerald-500/25"
+                      >
+                        <Store className="w-3 h-3" />
+                        <span>{t.commercialBadgeStore}</span>
+                      </button>
+                    )}
+
+                    {sellerAccountType === 'company' && (
+                      <button
+                        type="button"
+                        onClick={handleOpenCommercialPage}
+                        className="inline-flex items-center gap-1 text-[11px] font-black bg-sky-500/15 text-sky-300 border border-sky-500/40 px-2 py-0.5 rounded-full cursor-pointer hover:bg-sky-500/25"
+                      >
+                        <Building2 className="w-3 h-3" />
+                        <span>{t.commercialBadgeCompany}</span>
+                      </button>
+                    )}
+
                     {isSellerVerified ? (
                       <span className="inline-flex items-center gap-1 text-[11px] font-black bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 px-2.5 py-0.5 rounded-full shadow-sm">
                         <ShieldCheck className="w-3.5 h-3.5" />
@@ -280,6 +358,21 @@ export const ProductDetailModal: React.FC = () => {
                       </span>
                     )}
                   </div>
+
+                  {isCommercialSeller && sellerBusinessActivity && (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] text-amber-300 font-semibold">
+                        {sellerBusinessActivity}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleOpenCommercialPage}
+                        className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                      >
+                        {sellerAccountType === 'company' ? t.viewCompanyPage : t.viewStorePage}
+                      </button>
+                    </div>
+                  )}
 
                   <div className="text-xs text-neutral-400 flex items-center gap-2 mt-1.5 flex-wrap">
                     {/* Interactive Star Rating Button */}

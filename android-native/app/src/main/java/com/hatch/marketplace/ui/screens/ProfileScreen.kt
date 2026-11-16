@@ -22,11 +22,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.MarketplaceLogic
@@ -54,6 +57,9 @@ import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.ProfileSubTab
 import com.hatch.marketplace.data.model.PublicUser
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
+import com.hatch.marketplace.data.model.resolvedAccountType
+import com.hatch.marketplace.ui.components.BadgePill
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.modals.SelectablePill
 import com.hatch.marketplace.ui.theme.HatchAmber400
@@ -84,6 +90,7 @@ fun ProfileScreen(
     onSelectSubTab: (ProfileSubTab) -> Unit,
     onOpenAuth: () -> Unit,
     onOpenEditProfile: () -> Unit,
+    onOpenOwnBusinessProfile: () -> Unit = {},
     onSignOut: () -> Unit,
     onOpenProduct: (Product) -> Unit,
     onEditProduct: (Product) -> Unit,
@@ -173,6 +180,10 @@ fun ProfileScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            val accountType = publicUser.resolvedAccountType()
+            val isCommercial = accountType.isCommercial()
+            val avatarShape = if (isCommercial) RoundedCornerShape(14.dp) else CircleShape
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -180,17 +191,25 @@ fun ProfileScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
                     AsyncImage(
-                        model = publicUser.avatar.ifBlank { "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80" },
+                        model = publicUser.displayLogoOrAvatar().ifBlank { "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=256&q=80" },
                         contentDescription = publicUser.name,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.size(56.dp).clip(CircleShape).border(2.dp, HatchAmber500, CircleShape)
+                        modifier = Modifier.size(56.dp).clip(avatarShape).border(2.dp, HatchAmber500, avatarShape)
                     )
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(publicUser.name, color = HatchTextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                             if (publicUser.verifiedIdentity) {
                                 Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(18.dp))
                             }
+                            BadgePill(
+                                text = strings.accountTypeLabel(accountType.wireValue),
+                                bg = if (isCommercial) HatchAmber500.copy(alpha = 0.2f) else HatchCardElevated,
+                                fg = if (isCommercial) HatchAmber400 else HatchTextSecondary
+                            )
+                        }
+                        if (isCommercial && !publicUser.businessActivity.isNullOrBlank()) {
+                            Text(publicUser.businessActivity!!, color = HatchEmerald400, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         }
                         Text(publicUser.city, color = HatchTextSecondary, fontSize = 11.sp)
                         if (!privateUser?.phone.isNullOrBlank()) {
@@ -201,6 +220,33 @@ fun ProfileScreen(
                 Row {
                     IconButton(onClick = onOpenEditProfile) { Icon(Icons.Rounded.Edit, contentDescription = "Edit", tint = HatchAmber400) }
                     IconButton(onClick = onSignOut) { Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = "Logout", tint = HatchRed500) }
+                }
+            }
+
+            if (isCommercial) {
+                OutlinedButton(
+                    onClick = onOpenOwnBusinessProfile,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = if (accountType == AccountType.COMPANY) Icons.Rounded.Business else Icons.Rounded.Storefront,
+                        contentDescription = null,
+                        tint = HatchAmber400,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(strings.viewStorefrontLabel, color = HatchAmber400, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onOpenEditProfile,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(strings.upgradeAccountTitle, color = HatchAmber400, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
 

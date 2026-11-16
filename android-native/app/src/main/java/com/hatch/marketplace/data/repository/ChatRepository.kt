@@ -23,7 +23,7 @@ class ChatRepository @Inject constructor(
 ) {
     fun observeConversations(userId: String?, isVerifiedAdminEmail: Boolean): Flow<List<Conversation>> = callbackFlow {
         val db = clients.firestore
-        if (db == null || userId.isNullOrBlank()) {
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
@@ -46,7 +46,7 @@ class ChatRepository @Inject constructor(
 
     fun observeMessages(conversationId: String?): Flow<List<ChatMessage>> = callbackFlow {
         val db = clients.firestore
-        if (db == null || conversationId.isNullOrBlank()) {
+        if (db == null || conversationId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
@@ -69,6 +69,8 @@ class ChatRepository @Inject constructor(
         buyer: PublicUser
     ): Result<String> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == buyer.uid) { "Authenticated user mismatch." }
         require(buyer.uid != product.sellerId) { "You cannot chat on your own listing." }
 
         val convId = HatchFormatters.sanitizeFirestoreId("conv_${product.id}_${buyer.uid}_${product.sellerId}")
@@ -156,6 +158,8 @@ class ChatRepository @Inject constructor(
         note: String = ""
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == senderId) { "Authenticated user mismatch." }
         require(amount > 0.0) { "Offer amount must be positive." }
 
         val msgText = buildString {
@@ -199,6 +203,8 @@ class ChatRepository @Inject constructor(
         counterAmount: Double? = null
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == responderId) { "Authenticated user mismatch." }
         val msgId = HatchFormatters.sanitizeFirestoreId("msg_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val convRef = db.collection("conversations").document(conversation.id)
         val msgRef = convRef.collection("messages").document(msgId)
@@ -241,6 +247,8 @@ class ChatRepository @Inject constructor(
 
     suspend fun markConversationRead(conversation: Conversation, readerUid: String, messages: List<ChatMessage>) {
         val db = clients.firestore ?: return
+        val authUid = clients.auth?.currentUser?.uid ?: return
+        if (authUid != readerUid) return
         runCatching {
             val convRef = db.collection("conversations").document(conversation.id)
             val isBuyer = readerUid == conversation.buyerId
@@ -273,6 +281,8 @@ class ChatRepository @Inject constructor(
         audioDuration: Int? = null
     ) {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == senderId) { "Authenticated user mismatch." }
         val msgId = HatchFormatters.sanitizeFirestoreId("msg_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val convRef = db.collection("conversations").document(conversation.id)
         val msgRef = convRef.collection("messages").document(msgId)

@@ -100,6 +100,46 @@ enum class OfferStatus(val wireValue: String) {
     COUNTERED("countered")
 }
 
+enum class AccountType(val wireValue: String) {
+    PERSONAL("personal"),
+    STORE("store"),
+    COMPANY("company");
+
+    fun isCommercial(): Boolean = this == STORE || this == COMPANY
+
+    companion object {
+        fun fromWire(value: String?): AccountType =
+            entries.firstOrNull { it.wireValue == value?.trim()?.lowercase(Locale.ROOT) } ?: PERSONAL
+    }
+}
+
+enum class GuestAction {
+    BROWSE_MARKET,
+    BROWSE_SWIPE_DECK,
+    VIEW_PRODUCT_DETAIL,
+    VIEW_COMMERCIAL_DIRECTORY,
+    VIEW_BUSINESS_PROFILE,
+    SEARCH_OR_FILTER,
+    PUBLISH_LISTING,
+    EDIT_OR_DELETE_LISTING,
+    MAKE_OFFER_OR_BUY,
+    CHAT_OR_MESSAGE,
+    DIRECT_CONTACT_OR_CALL,
+    TOGGLE_FAVORITE,
+    RATE_OR_REVIEW,
+    REPORT_VIOLATION,
+    WATCH_REWARD_OR_BOOST
+}
+
+enum class GuestPromptReason {
+    CONTACT_OR_BUY,
+    SELL,
+    OFFER_NEGOTIATE,
+    FAVORITES,
+    RATE_OR_REPORT,
+    GENERAL
+}
+
 enum class AdFormat(val wireValue: String) {
     BANNER("banner"),
     INTERSTITIAL("interstitial"),
@@ -200,9 +240,17 @@ data class PublicUser(
     val suspendedUntil: String? = null,
     val suspensionDays: Int? = null,
     val suspensionReason: String? = null,
+    val accountType: String = AccountType.PERSONAL.wireValue,
+    val businessActivity: String? = null,
+    val businessLogo: String? = null,
     val joinedDate: Timestamp? = null,
     val updatedAt: Timestamp? = null
 )
+
+fun PublicUser.resolvedAccountType(): AccountType = AccountType.fromWire(accountType)
+
+fun PublicUser.displayLogoOrAvatar(): String =
+    businessLogo?.takeIf { it.isNotBlank() } ?: avatar
 
 data class PrivateUser(
     val uid: String = "",
@@ -236,6 +284,8 @@ data class Product(
     val sellerRating: Double = 5.0,
     val sellerDealsCount: Int = 0,
     val sellerVerified: Boolean = false,
+    val sellerAccountType: String = AccountType.PERSONAL.wireValue,
+    val sellerBusinessActivity: String? = null,
     val paymentMethods: List<String> = listOf(PaymentMethod.BANKAK.wireValue, PaymentMethod.CASH.wireValue),
     val negotiable: Boolean = true,
     val deliveryAvailable: Boolean = false,
@@ -247,6 +297,8 @@ data class Product(
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 )
+
+fun Product.resolvedSellerAccountType(): AccountType = AccountType.fromWire(sellerAccountType)
 
 data class Conversation(
     val id: String = "",
@@ -414,6 +466,26 @@ data class AdRevenueStats(
     val estimatedSdg: Double
 )
 
+data class SellerBrandSnapshot(
+    val sellerName: String,
+    val sellerAvatar: String,
+    val sellerAccountType: String,
+    val sellerBusinessActivity: String
+)
+
+data class CommercialDirectoryEntry(
+    val sellerId: String,
+    val name: String,
+    val logoUrl: String,
+    val accountType: AccountType,
+    val businessActivity: String,
+    val city: String,
+    val rating: Double,
+    val dealsCompleted: Int,
+    val verifiedIdentity: Boolean,
+    val products: List<Product>
+)
+
 object HatchFormatters {
     fun formatSdg(amount: Double, language: AppLanguage): String {
         val nf = NumberFormat.getNumberInstance(Locale.US).apply {
@@ -555,5 +627,185 @@ object MarketplaceLogic {
     fun hasDepositWarningKeywords(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
         return DEPOSIT_SCAM_KEYWORDS.any { lower.contains(it) }
+    }
+
+    fun resolveAccountType(raw: String?): AccountType = AccountType.fromWire(raw)
+
+    fun requiresOnboarding(publicUser: PublicUser?): Boolean =
+        publicUser == null || publicUser.name.isBlank() || publicUser.city.isBlank()
+
+    fun isCommercialSeller(accountType: String?): Boolean =
+        AccountType.fromWire(accountType).isCommercial()
+
+    fun buildSellerBrandSnapshot(
+        name: String,
+        avatar: String,
+        businessLogo: String?,
+        accountType: AccountType,
+        businessActivity: String?
+    ): SellerBrandSnapshot {
+        val cleanName = name.trim().take(80).ifBlank { "تاجر هتش" }
+        val cleanLogo = if (accountType.isCommercial()) businessLogo?.trim().orEmpty().take(1000) else ""
+        val effectiveAvatar = if (cleanLogo.isNotBlank()) cleanLogo else avatar.trim().take(1000)
+        val cleanActivity = if (accountType.isCommercial()) businessActivity?.trim().orEmpty().take(120) else ""
+        return SellerBrandSnapshot(
+            sellerName = cleanName,
+            sellerAvatar = effectiveAvatar,
+            sellerAccountType = accountType.wireValue,
+            sellerBusinessActivity = cleanActivity
+        )
+    }
+
+    fun buildBusinessStorefrontProducts(products: List<Product>, sellerId: String): List<Product> =
+        products
+            .filter { it.sellerId == sellerId && it.status == ProductStatus.ACTIVE.wireValue }
+            .sortedWith(
+                compareByDescending<Product> { it.featured }
+                    .thenByDescending { it.urgentSale }
+                    .thenByDescending { it.createdAt?.seconds ?: 0L }
+            )
+
+    fun buildCommercialDirectory(
+        users: List<PublicUser>,
+        products: List<Product>,
+        targetType: AccountType
+    ): List<CommercialDirectoryEntry> {
+        if (!targetType.isCommercial()) return emptyList()
+
+        val activeProductsBySeller = products
+            .filter { it.status == ProductStatus.ACTIVE.wireValue && it.sellerId.isNotBlank() }
+            .groupBy { it.sellerId }
+            .mapValues { (_, list) ->
+                list.sortedWith(
+                    compareByDescending<Product> { it.featured }
+                        .thenByDescending { it.urgentSale }
+                        .thenByDescending { it.createdAt?.seconds ?: 0L }
+                )
+            }
+
+        val allUsersById = users.filter { it.uid.isNotBlank() }.associateBy { it.uid }
+
+        val candidateIds = linkedSetOf<String>()
+        users.forEach { user ->
+            if (
+                user.uid.isNotBlank() &&
+                user.status == UserStatus.ACTIVE.wireValue &&
+                user.resolvedAccountType() == targetType &&
+                user.name.isNotBlank()
+            ) {
+                candidateIds.add(user.uid)
+            }
+        }
+        activeProductsBySeller.forEach { (sellerId, sellerProducts) ->
+            val liveUser = allUsersById[sellerId]
+            val resolvedType = liveUser?.resolvedAccountType()
+                ?: sellerProducts.firstOrNull()?.resolvedSellerAccountType()
+            val isActiveAccount = liveUser == null || liveUser.status == UserStatus.ACTIVE.wireValue
+            if (isActiveAccount && resolvedType == targetType) {
+                candidateIds.add(sellerId)
+            }
+        }
+
+        return candidateIds.mapNotNull { sellerId ->
+            val liveUser = allUsersById[sellerId]
+            val sellerProducts = activeProductsBySeller[sellerId].orEmpty()
+            val firstProd = sellerProducts.firstOrNull()
+            val displayName = liveUser?.name?.takeIf { it.isNotBlank() }
+                ?: firstProd?.sellerName?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+
+            CommercialDirectoryEntry(
+                sellerId = sellerId,
+                name = displayName,
+                logoUrl = liveUser?.displayLogoOrAvatar()?.takeIf { it.isNotBlank() }
+                    ?: firstProd?.sellerAvatar.orEmpty(),
+                accountType = targetType,
+                businessActivity = liveUser?.businessActivity?.takeIf { it.isNotBlank() }
+                    ?: firstProd?.sellerBusinessActivity.orEmpty(),
+                city = liveUser?.city?.takeIf { it.isNotBlank() }
+                    ?: firstProd?.city.orEmpty(),
+                rating = liveUser?.rating ?: firstProd?.sellerRating ?: 5.0,
+                dealsCompleted = maxOf(liveUser?.dealsCompleted ?: 0, firstProd?.sellerDealsCount ?: 0),
+                verifiedIdentity = (liveUser?.verifiedIdentity == true) || (firstProd?.sellerVerified == true),
+                products = sellerProducts
+            )
+        }.sortedWith(
+            compareByDescending<CommercialDirectoryEntry> { it.products.size }
+                .thenByDescending { it.verifiedIdentity }
+                .thenByDescending { it.rating }
+                .thenBy { it.name }
+        )
+    }
+
+    fun isActionAllowedForGuest(action: GuestAction): Boolean = when (action) {
+        GuestAction.BROWSE_MARKET,
+        GuestAction.BROWSE_SWIPE_DECK,
+        GuestAction.VIEW_PRODUCT_DETAIL,
+        GuestAction.VIEW_COMMERCIAL_DIRECTORY,
+        GuestAction.VIEW_BUSINESS_PROFILE,
+        GuestAction.SEARCH_OR_FILTER -> true
+
+        GuestAction.PUBLISH_LISTING,
+        GuestAction.EDIT_OR_DELETE_LISTING,
+        GuestAction.MAKE_OFFER_OR_BUY,
+        GuestAction.CHAT_OR_MESSAGE,
+        GuestAction.DIRECT_CONTACT_OR_CALL,
+        GuestAction.TOGGLE_FAVORITE,
+        GuestAction.RATE_OR_REVIEW,
+        GuestAction.REPORT_VIOLATION,
+        GuestAction.WATCH_REWARD_OR_BOOST -> false
+    }
+
+    fun guestPromptReasonFor(action: GuestAction): GuestPromptReason = when (action) {
+        GuestAction.PUBLISH_LISTING,
+        GuestAction.EDIT_OR_DELETE_LISTING -> GuestPromptReason.SELL
+        GuestAction.MAKE_OFFER_OR_BUY -> GuestPromptReason.OFFER_NEGOTIATE
+        GuestAction.CHAT_OR_MESSAGE,
+        GuestAction.DIRECT_CONTACT_OR_CALL -> GuestPromptReason.CONTACT_OR_BUY
+        GuestAction.TOGGLE_FAVORITE -> GuestPromptReason.FAVORITES
+        GuestAction.RATE_OR_REVIEW,
+        GuestAction.REPORT_VIOLATION -> GuestPromptReason.RATE_OR_REPORT
+        else -> GuestPromptReason.GENERAL
+    }
+
+    fun sanitizeCommercialProfileForGuest(user: PublicUser): PublicUser? {
+        if (user.uid.isBlank() || user.name.isBlank()) return null
+        if (user.status != UserStatus.ACTIVE.wireValue) return null
+        if (!user.resolvedAccountType().isCommercial()) return null
+        return user.copy(
+            suspendedUntil = null,
+            suspensionDays = null,
+            suspensionReason = null
+        )
+    }
+
+    fun mergeUsersAndCommercialProfiles(
+        publicUsers: List<PublicUser>,
+        commercialProfiles: List<PublicUser>,
+        currentUser: PublicUser? = null
+    ): List<PublicUser> {
+        val merged = linkedMapOf<String, PublicUser>()
+        commercialProfiles.forEach { profile ->
+            if (profile.uid.isNotBlank()) {
+                merged[profile.uid] = profile
+            }
+        }
+        publicUsers.forEach { user ->
+            if (user.uid.isNotBlank()) {
+                val existing = merged[user.uid]
+                merged[user.uid] = if (existing == null) {
+                    user
+                } else {
+                    user.copy(
+                        businessLogo = user.businessLogo?.takeIf { it.isNotBlank() } ?: existing.businessLogo,
+                        businessActivity = user.businessActivity?.takeIf { it.isNotBlank() } ?: existing.businessActivity
+                    )
+                }
+            }
+        }
+        if (currentUser != null && currentUser.uid.isNotBlank()) {
+            merged[currentUser.uid] = currentUser
+        }
+        return merged.values.toList()
     }
 }

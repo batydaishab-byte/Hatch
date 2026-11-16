@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.AuthCredential
 import com.hatch.marketplace.data.local.HatchPreferences
 import com.hatch.marketplace.data.media.CloudinaryQuotaStatus
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AdMobConfig
 import com.hatch.marketplace.data.model.AdRevenueStats
 import com.hatch.marketplace.data.model.AdminSubTab
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.ChatMessage
 import com.hatch.marketplace.data.model.Conversation
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.MainTab
 import com.hatch.marketplace.data.model.MarketFilterState
 import com.hatch.marketplace.data.model.MarketplaceLogic
@@ -26,6 +28,7 @@ import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.ToastType
 import com.hatch.marketplace.data.model.UiToast
 import com.hatch.marketplace.data.model.UserReview
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.data.network.NetworkMonitor
 import com.hatch.marketplace.data.repository.AuthRepository
 import com.hatch.marketplace.data.repository.AuthSessionState
@@ -39,7 +42,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -83,6 +88,7 @@ data class HatchUiState(
     val reviews: List<UserReview> = emptyList(),
     val reports: List<ReportTicket> = emptyList(),
     val allUsers: List<PublicUser> = emptyList(),
+    val commercialProfiles: List<PublicUser> = emptyList(),
     val sponsoredAds: List<SponsoredAdItem> = emptyList(),
     val adConfig: AdMobConfig = AdMobConfig(),
     val cloudinaryQuota: CloudinaryQuotaStatus = CloudinaryQuotaStatus(),
@@ -92,6 +98,9 @@ data class HatchUiState(
     val isSubmitting: Boolean = false,
     val toasts: List<UiToast> = emptyList(),
     val selectedProduct: Product? = null,
+    val selectedBusinessSellerId: String? = null,
+    val commercialDirectoryType: AccountType? = null,
+    val guestPromptReason: GuestPromptReason? = null,
     val offerTargetProduct: Product? = null,
     val editingProduct: Product? = null,
     val soldTargetProduct: Product? = null,
@@ -112,6 +121,9 @@ data class HatchUiState(
 ) {
     val currentUser: PublicUser?
         get() = auth.publicProfile
+
+    val directoryUsers: List<PublicUser>
+        get() = MarketplaceLogic.mergeUsersAndCommercialProfiles(allUsers, commercialProfiles, currentUser)
 
     val isSignedIn: Boolean
         get() = auth.firebaseUser != null
@@ -212,6 +224,10 @@ class HatchMainViewModel @Inject constructor(
         authRepo.observePublicUsers(session.firebaseUser != null, session.isVerifiedAdminEmail)
     }
 
+    private val commercialProfilesFlow = authSessionFlow.flatMapLatest { session ->
+        authRepo.observeCommercialProfiles(session.isVerifiedAdminEmail)
+    }
+
     private val sponsoredAdsFlow = authSessionFlow.flatMapLatest { session ->
         monetizationRepo.observeSponsoredAds(session.isVerifiedAdminEmail)
     }
@@ -232,7 +248,7 @@ class HatchMainViewModel @Inject constructor(
         val notifications: List<NotificationItem>,
         val reviews: List<UserReview>,
         val reports: List<ReportTicket>,
-        val users: List<PublicUser>,
+        val usersAndCommercial: Pair<List<PublicUser>, List<PublicUser>>,
         val ads: List<SponsoredAdItem>
     )
 
@@ -254,14 +270,21 @@ class HatchMainViewModel @Inject constructor(
         CoreStreams(auth, products, favs, convs, msgs)
     }
 
+    private val usersCombinedFlow = combine(
+        usersFlow,
+        commercialProfilesFlow
+    ) { users, commercial ->
+        users to commercial
+    }
+
     private val metaCombined = combine(
         notificationsFlow,
         reviewsFlow,
         reportsFlow,
-        usersFlow,
+        usersCombinedFlow,
         sponsoredAdsFlow
-    ) { notifs, reviews, reports, users, ads ->
-        MetaStreams(notifs, reviews, reports, users, ads)
+    ) { notifs, reviews, reports, usersPair, ads ->
+        MetaStreams(notifs, reviews, reports, usersPair, ads)
     }
 
     private val effectiveLanguageFlow = combine(
@@ -287,13 +310,37 @@ class HatchMainViewModel @Inject constructor(
         metaCombined,
         settingsCombined
     ) { local, core, meta, settings ->
+        val (publicUsers, commercialProfiles) = meta.usersAndCommercial
+        val mergedDirectoryUsers = MarketplaceLogic.mergeUsersAndCommercialProfiles(
+            publicUsers = publicUsers,
+            commercialProfiles = commercialProfiles,
+            currentUser = core.auth.publicProfile
+        )
         val reviewsBySeller = meta.reviews.groupBy { it.sellerId }
+        val usersById = mergedDirectoryUsers.associateBy { it.uid }
         val enrichedProducts = core.products.map { p ->
             val sellerReviews = reviewsBySeller[p.sellerId].orEmpty()
-            if (sellerReviews.isNotEmpty()) {
-                val avg = sellerReviews.map { it.rating }.average()
-                p.copy(sellerRating = avg)
-            } else p
+            val liveSeller = usersById[p.sellerId]
+            val avgRating = if (sellerReviews.isNotEmpty()) {
+                sellerReviews.map { it.rating }.average()
+            } else {
+                p.sellerRating
+            }
+            if (liveSeller != null) {
+                p.copy(
+                    sellerRating = avgRating,
+                    sellerName = liveSeller.name.ifBlank { p.sellerName },
+                    sellerAvatar = liveSeller.displayLogoOrAvatar().ifBlank { p.sellerAvatar },
+                    sellerAccountType = liveSeller.accountType,
+                    sellerBusinessActivity = liveSeller.businessActivity ?: p.sellerBusinessActivity,
+                    sellerDealsCount = maxOf(p.sellerDealsCount, liveSeller.dealsCompleted),
+                    sellerVerified = p.sellerVerified || liveSeller.verifiedIdentity
+                )
+            } else if (sellerReviews.isNotEmpty()) {
+                p.copy(sellerRating = avgRating)
+            } else {
+                p
+            }
         }
 
         local.copy(
@@ -308,7 +355,8 @@ class HatchMainViewModel @Inject constructor(
             notifications = meta.notifications,
             reviews = meta.reviews,
             reports = meta.reports,
-            allUsers = meta.users,
+            allUsers = publicUsers,
+            commercialProfiles = commercialProfiles,
             sponsoredAds = meta.ads,
             adConfig = settings.adConfig,
             filter = local.filter.copy(selectedCity = settings.selectedCity),
@@ -329,12 +377,43 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             authRepo.verifyFirestoreServerConnection()
         }
+        viewModelScope.launch {
+            authSessionFlow
+                .distinctUntilChangedBy {
+                    listOf(
+                        it.publicProfile?.uid,
+                        it.publicProfile?.accountType,
+                        it.publicProfile?.name,
+                        it.publicProfile?.city,
+                        it.publicProfile?.businessActivity,
+                        it.publicProfile?.businessLogo,
+                        it.publicProfile?.avatar,
+                        it.publicProfile?.status,
+                        it.publicProfile?.dealsCompleted,
+                        it.publicProfile?.verifiedIdentity
+                    )
+                }
+                .collectLatest { session ->
+                    val profile = session.publicProfile
+                    if (session.firebaseUser != null && profile != null) {
+                        authRepo.ensureCommercialProfileSynced(profile)
+                    }
+                }
+        }
+    }
+
+    fun requestGuestPrompt(reason: GuestPromptReason) {
+        _localState.update { it.copy(guestPromptReason = reason) }
+    }
+
+    fun dismissGuestPrompt() {
+        _localState.update { it.copy(guestPromptReason = null) }
     }
 
     fun selectTab(tab: MainTab) {
         if ((tab == MainTab.CHAT || tab == MainTab.FAVORITES) && !uiState.value.isSignedIn) {
-            showToast(strings().loginRequiredToast, ToastType.INFO)
-            _localState.update { it.copy(showAuthSheet = true) }
+            val reason = if (tab == MainTab.CHAT) GuestPromptReason.CONTACT_OR_BUY else GuestPromptReason.FAVORITES
+            requestGuestPrompt(reason)
             return
         }
         if (tab == MainTab.ADMIN && !uiState.value.isAdmin) {
@@ -468,7 +547,10 @@ class HatchMainViewModel @Inject constructor(
         phone: String,
         city: String,
         avatar: String,
-        avatarUri: Uri? = null
+        avatarUri: Uri? = null,
+        accountType: String = AccountType.PERSONAL.wireValue,
+        businessActivity: String = "",
+        businessLogo: String = ""
     ) {
         val fbUser = uiState.value.auth.firebaseUser ?: authRepo.currentFirebaseUser()
         if (fbUser == null) {
@@ -491,7 +573,23 @@ class HatchMainViewModel @Inject constructor(
             } else {
                 avatar
             }
-            authRepo.saveOnboardingProfile(fbUser.uid, fbUser.email.orEmpty(), name, phone, city, resolvedAvatar)
+            val resolvedType = AccountType.fromWire(accountType)
+            val resolvedLogo = if (resolvedType.isCommercial()) {
+                if (avatarUri != null) resolvedAvatar else businessLogo.trim().ifBlank { resolvedAvatar }
+            } else {
+                ""
+            }
+            authRepo.saveOnboardingProfile(
+                uid = fbUser.uid,
+                email = fbUser.email.orEmpty(),
+                name = name,
+                phone = phone,
+                city = city,
+                avatar = resolvedAvatar,
+                accountType = resolvedType.wireValue,
+                businessActivity = businessActivity,
+                businessLogo = resolvedLogo
+            )
                 .onSuccess {
                     android.util.Log.d("HatchAuthFlow", "Onboarding profile saved — navigating to Home")
                     prefs.setOnboardingCompleted(true)
@@ -519,9 +617,14 @@ class HatchMainViewModel @Inject constructor(
         phone: String,
         city: String,
         avatar: String,
-        avatarUri: Uri? = null
+        avatarUri: Uri? = null,
+        accountType: String = AccountType.PERSONAL.wireValue,
+        businessActivity: String = "",
+        businessLogo: String = ""
     ) {
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val previousType = AccountType.fromWire(uiState.value.currentUser?.accountType)
+        val nextType = AccountType.fromWire(accountType)
         viewModelScope.launch {
             setSubmitting(true)
             val resolvedAvatar = if (avatarUri != null) {
@@ -533,10 +636,29 @@ class HatchMainViewModel @Inject constructor(
             } else {
                 avatar
             }
-            authRepo.updateProfile(uid, name, phone, city, resolvedAvatar)
+            val resolvedLogo = if (nextType.isCommercial()) {
+                if (avatarUri != null) resolvedAvatar else businessLogo.trim().ifBlank { resolvedAvatar }
+            } else {
+                ""
+            }
+            authRepo.updateProfile(
+                uid = uid,
+                name = name,
+                phone = phone,
+                city = city,
+                avatar = resolvedAvatar,
+                accountType = nextType.wireValue,
+                businessActivity = businessActivity,
+                businessLogo = resolvedLogo
+            )
                 .onSuccess {
                     _localState.update { it.copy(showEditProfileDialog = false) }
-                    showToast(if (isArabic()) "تم تحديث البيانات" else "Profile updated", ToastType.SUCCESS)
+                    val msg = if (previousType == AccountType.PERSONAL && nextType.isCommercial()) {
+                        if (isArabic()) "تمت ترقية حسابك بنجاح 🎉" else "Account upgraded successfully 🎉"
+                    } else {
+                        if (isArabic()) "تم تحديث البيانات" else "Profile updated"
+                    }
+                    showToast(msg, ToastType.SUCCESS)
                 }
                 .onFailure { e -> showToast(e.localizedMessage ?: "Update failed", ToastType.ERROR) }
             setSubmitting(false)
@@ -550,6 +672,9 @@ class HatchMainViewModel @Inject constructor(
             it.copy(
                 activeTab = MainTab.SWIPE,
                 activeConversationId = null,
+                selectedBusinessSellerId = null,
+                commercialDirectoryType = null,
+                guestPromptReason = null,
                 showEditProfileDialog = false,
                 forceOnboardingStep = false,
                 authErrorMessage = null
@@ -578,6 +703,22 @@ class HatchMainViewModel @Inject constructor(
 
     fun closeProductDetail() { _localState.update { it.copy(selectedProduct = null) } }
 
+    fun openBusinessProfile(sellerId: String) {
+        _localState.update { it.copy(selectedBusinessSellerId = sellerId) }
+    }
+
+    fun closeBusinessProfile() {
+        _localState.update { it.copy(selectedBusinessSellerId = null) }
+    }
+
+    fun openCommercialDirectory(type: AccountType) {
+        _localState.update { it.copy(commercialDirectoryType = type) }
+    }
+
+    fun closeCommercialDirectory() {
+        _localState.update { it.copy(commercialDirectoryType = null) }
+    }
+
     fun browseNextSwipeCard(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
@@ -594,8 +735,7 @@ class HatchMainViewModel @Inject constructor(
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
         val uid = uiState.value.auth.firebaseUser?.uid
         if (uid == null) {
-            showToast(strings().loginRequiredToast, ToastType.INFO)
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.FAVORITES)
             return
         }
         viewModelScope.launch {
@@ -617,8 +757,7 @@ class HatchMainViewModel @Inject constructor(
     fun toggleFavorite(productId: String) {
         val uid = uiState.value.auth.firebaseUser?.uid
         if (uid == null) {
-            showToast(strings().loginRequiredToast, ToastType.INFO)
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.FAVORITES)
             return
         }
         val currentlyFav = uiState.value.favoriteIds.contains(productId)
@@ -629,7 +768,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun openSellModal() {
-        if (!requireActiveUserOrPrompt()) return
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         _localState.update { it.copy(showSellModal = true) }
     }
 
@@ -653,8 +792,8 @@ class HatchMainViewModel @Inject constructor(
         deliveryAvailable: Boolean,
         urgentSale: Boolean
     ) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         val seller = uiState.value.currentUser ?: return
-        if (!requireActiveUserOrPrompt()) return
         viewModelScope.launch {
             setSubmitting(true)
             productRepo.createProduct(
@@ -686,7 +825,10 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun openEditProduct(product: Product) { _localState.update { it.copy(editingProduct = product) } }
+    fun openEditProduct(product: Product) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
+        _localState.update { it.copy(editingProduct = product) }
+    }
     fun closeEditProduct() { _localState.update { it.copy(editingProduct = null) } }
 
     fun saveEditedProduct(
@@ -705,6 +847,7 @@ class HatchMainViewModel @Inject constructor(
         deliveryAvailable: Boolean,
         urgentSale: Boolean
     ) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         viewModelScope.launch {
             setSubmitting(true)
             productRepo.updateProduct(
@@ -734,10 +877,14 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun requestMarkSold(product: Product) { _localState.update { it.copy(soldTargetProduct = product) } }
+    fun requestMarkSold(product: Product) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
+        _localState.update { it.copy(soldTargetProduct = product) }
+    }
     fun closeMarkSold() { _localState.update { it.copy(soldTargetProduct = null) } }
 
     fun confirmMarkSold() {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         val target = uiState.value.soldTargetProduct ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -763,7 +910,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun openOfferModal(product: Product) {
-        if (!requireActiveUserOrPrompt()) return
+        if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
         if (product.sellerId == uiState.value.auth.firebaseUser?.uid) {
             showToast(if (isArabic()) "لا يمكنك تقديم عرض على منتجك" else "Cannot bid on your own listing", ToastType.WARNING)
             return
@@ -774,8 +921,8 @@ class HatchMainViewModel @Inject constructor(
     fun closeOfferModal() { _localState.update { it.copy(offerTargetProduct = null) } }
 
     fun submitOffer(product: Product, amount: Double, note: String) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
         val buyer = uiState.value.currentUser ?: return
-        if (!requireActiveUserOrPrompt()) return
         viewModelScope.launch {
             setSubmitting(true)
             chatRepo.startOrGetConversation(product, buyer)
@@ -810,8 +957,7 @@ class HatchMainViewModel @Inject constructor(
 
     fun startChatWithSeller(product: Product) {
         if (!uiState.value.isSignedIn) {
-            showToast(strings().loginRequiredToast, ToastType.INFO)
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
             return
         }
         val buyer = uiState.value.currentUser ?: return
@@ -847,6 +993,10 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendChatMessage(text: String) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
+            return
+        }
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -856,6 +1006,10 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendInspectionPhoto(uri: Uri?, directUrl: String?, tag: String, caption: String) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
+            return
+        }
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -875,6 +1029,10 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendVoiceNote(audioUrl: String, durationSeconds: Int) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
+            return
+        }
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -884,6 +1042,10 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun respondToOffer(status: OfferStatus, counterAmount: Double? = null) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
+            return
+        }
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -895,7 +1057,7 @@ class HatchMainViewModel @Inject constructor(
 
     fun openReviewModal(request: ReviewRequest) {
         if (!uiState.value.isSignedIn) {
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
             return
         }
         _localState.update { it.copy(reviewRequest = request) }
@@ -904,6 +1066,10 @@ class HatchMainViewModel @Inject constructor(
     fun closeReviewModal() { _localState.update { it.copy(reviewRequest = null) } }
 
     fun submitReview(rating: Int, comment: String, tags: List<String>) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
+            return
+        }
         val req = uiState.value.reviewRequest ?: return
         val reviewer = uiState.value.currentUser ?: return
         viewModelScope.launch {
@@ -928,7 +1094,7 @@ class HatchMainViewModel @Inject constructor(
 
     fun openReportModal(request: ReportRequest) {
         if (!uiState.value.isSignedIn) {
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
             return
         }
         _localState.update { it.copy(reportRequest = request) }
@@ -937,6 +1103,10 @@ class HatchMainViewModel @Inject constructor(
     fun closeReportModal() { _localState.update { it.copy(reportRequest = null) } }
 
     fun submitReport(reason: String, message: String, flagListing: Boolean) {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
+            return
+        }
         val req = uiState.value.reportRequest ?: return
         val reporter = uiState.value.currentUser ?: return
         viewModelScope.launch {
@@ -959,7 +1129,13 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun openNotifications() { _localState.update { it.copy(showNotificationsModal = true) } }
+    fun openNotifications() {
+        if (!uiState.value.isSignedIn) {
+            requestGuestPrompt(GuestPromptReason.GENERAL)
+            return
+        }
+        _localState.update { it.copy(showNotificationsModal = true) }
+    }
     fun closeNotifications() { _localState.update { it.copy(showNotificationsModal = false) } }
 
     fun markAllNotificationsRead() {
@@ -977,12 +1153,15 @@ class HatchMainViewModel @Inject constructor(
     fun closeSafetyGuide() { _localState.update { it.copy(showSafetyGuideModal = false) } }
     fun openNativeInfoDialog() { _localState.update { it.copy(showNativeInfoDialog = true) } }
     fun closeNativeInfoDialog() { _localState.update { it.copy(showNativeInfoDialog = false) } }
-    fun openEditProfile() { _localState.update { it.copy(showEditProfileDialog = true) } }
+    fun openEditProfile() {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
+        _localState.update { it.copy(showEditProfileDialog = true) }
+    }
     fun closeEditProfile() { _localState.update { it.copy(showEditProfileDialog = false) } }
 
     fun launchRewardedAdForCredit(targetProductId: String? = null) {
         if (!uiState.value.isSignedIn) {
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(GuestPromptReason.GENERAL)
             return
         }
         val ad = uiState.value.sponsoredAds.firstOrNull {
@@ -1149,11 +1328,10 @@ class HatchMainViewModel @Inject constructor(
         _localState.update { state -> state.copy(toasts = state.toasts.filterNot { it.id == id }) }
     }
 
-    private fun requireActiveUserOrPrompt(): Boolean {
+    private fun requireActiveUserOrPrompt(reason: GuestPromptReason = GuestPromptReason.GENERAL): Boolean {
         val state = uiState.value
         if (!state.isSignedIn) {
-            showToast(strings().loginRequiredToast, ToastType.INFO)
-            _localState.update { it.copy(showAuthSheet = true) }
+            requestGuestPrompt(reason)
             return false
         }
         if (state.isCurrentlySuspended) {

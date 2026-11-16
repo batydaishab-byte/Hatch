@@ -1,7 +1,9 @@
 package com.hatch.marketplace.ui.i18n
 
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.CategoryId
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.PaymentMethod
 import com.hatch.marketplace.data.model.ProductCondition
 import com.hatch.marketplace.data.model.SudaneseCities
@@ -58,5 +60,43 @@ class HatchStringsParityTest {
         assertTrue(en.saveAndContinue.isNotBlank())
         assertTrue(!ar.signInSubtitle.contains("البريد الإلكتروني"))
         assertTrue(!en.signInSubtitle.contains("Email"))
+
+        assertEquals("مرحباً بك في HATCH، اختر نوع حسابك", ar.accountTypeChooserTitle)
+        assertTrue(en.accountTypeChooserTitle.isNotBlank())
+        assertTrue(ar.accountPersonalTitle.isNotBlank() && en.accountPersonalTitle.isNotBlank())
+        assertTrue(ar.accountStoreTitle.isNotBlank() && en.accountStoreTitle.isNotBlank())
+        assertTrue(ar.accountCompanyTitle.isNotBlank() && en.accountCompanyTitle.isNotBlank())
+        assertTrue(ar.upgradeAccountTitle.isNotBlank() && en.upgradeAccountTitle.isNotBlank())
+        assertTrue(ar.viewStorefrontLabel.isNotBlank() && en.viewStorefrontLabel.isNotBlank())
+        assertTrue(ar.storefrontProductsTitle.isNotBlank() && en.storefrontProductsTitle.isNotBlank())
+        assertEquals("المتاجر", ar.storesButtonLabel)
+        assertEquals("الشركات", ar.companiesButtonLabel)
+        assertTrue(en.storesButtonLabel.isNotBlank() && en.companiesButtonLabel.isNotBlank())
+        assertTrue(ar.registeredStoresTitle.isNotBlank() && en.registeredStoresTitle.isNotBlank())
+        assertTrue(ar.registeredCompaniesTitle.isNotBlank() && en.registeredCompaniesTitle.isNotBlank())
+        assertTrue(ar.noStoresYet.isNotBlank() && en.noStoresYet.isNotBlank())
+        assertTrue(ar.noCompaniesYet.isNotBlank() && en.noCompaniesYet.isNotBlank())
+        AccountType.entries.forEach { type ->
+            assertTrue(ar.accountTypeLabel(type.wireValue).isNotBlank())
+            assertTrue(en.accountTypeLabel(type.wireValue).isNotBlank())
+        }
+
+        assertTrue(ar.guestDialogTitle.isNotBlank() && en.guestDialogTitle.isNotBlank())
+        assertEquals("متابعة التصفح كضيف", ar.guestDialogKeepBrowsing)
+        assertTrue(en.guestDialogKeepBrowsing.isNotBlank())
+        assertEquals(
+            "هل ترغب في التواصل مع البائع؟ سجّل دخولك إلى HATCH للاستفادة من خدمات التواصل والشراء.",
+            ar.guestPromptMessage(GuestPromptReason.CONTACT_OR_BUY)
+        )
+        assertEquals(
+            "سجّل دخولك إلى HATCH لتتمكن من نشر منتجاتك والبيع.",
+            ar.guestPromptMessage(GuestPromptReason.SELL)
+        )
+        assertTrue(ar.guestStorefrontReadOnlyHint.isNotBlank() && en.guestStorefrontReadOnlyHint.isNotBlank())
+        assertTrue(ar.guestDetailSignInToContact.isNotBlank() && en.guestDetailSignInToContact.isNotBlank())
+        GuestPromptReason.entries.forEach { reason ->
+            assertTrue(ar.guestPromptMessage(reason).isNotBlank())
+            assertTrue(en.guestPromptMessage(reason).isNotBlank())
+        }
     }
 }

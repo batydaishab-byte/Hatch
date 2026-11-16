@@ -22,6 +22,7 @@ import { ApkInstallModal } from './components/ApkInstallModal';
 import { ReportViolationModal } from './components/ReportViolationModal';
 import { CreateAccountModal } from './components/CreateAccountModal';
 import { EditProfileModal } from './components/EditProfileModal';
+import { BusinessProfileModal } from './components/BusinessProfileModal';
 import { UserRatingModal } from './components/UserRatingModal';
 import { AdMobInterstitialModal } from './components/AdMobInterstitialModal';
 import { AdMobRewardedModal } from './components/AdMobRewardedModal';
@@ -127,6 +128,7 @@ const MainContent: React.FC = () => {
       <ReportViolationModal />
       <CreateAccountModal />
       <EditProfileModal />
+      <BusinessProfileModal />
       <UserRatingModal />
       <AdMobInterstitialModal />
       <AdMobRewardedModal />

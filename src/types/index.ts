@@ -76,6 +76,18 @@ export type SudaneseCity = (typeof SUDANESE_CITIES)[number] | string;
 
 export type PaymentMethod = 'bankak' | 'fawry' | 'cash' | 'ocash';
 
+export type AccountType = 'personal' | 'store' | 'company';
+
+export const resolveAccountType = (
+  userOrType?: Pick<User, 'accountType'> | AccountType | null
+): AccountType => {
+  const raw = typeof userOrType === 'string' ? userOrType : userOrType?.accountType;
+  if (raw === 'store' || raw === 'company' || raw === 'personal') {
+    return raw;
+  }
+  return 'personal';
+};
+
 export interface Product {
   id: string;
   titleAr: string;
@@ -98,6 +110,8 @@ export interface Product {
   sellerDealsCount: number;
   sellerVerified: boolean;
   sellerReportsCount?: number;
+  sellerAccountType?: AccountType;
+  sellerBusinessActivity?: string;
   paymentMethods: PaymentMethod[];
   negotiable: boolean;
   deliveryAvailable: boolean;
@@ -121,6 +135,11 @@ export interface User {
   verifiedIdentity: boolean;
   joinedDate: string;
   role: 'user' | 'admin';
+  accountType?: AccountType;
+  businessActivity?: string;
+  businessLogo?: string;
+  email?: string;
+  profileCompleted?: boolean;
   status?: 'active' | 'suspended';
   suspendedUntil?: string;
   suspensionDays?: number;

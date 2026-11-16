@@ -235,6 +235,19 @@ class MonetizationRepository @Inject constructor(
             )
         ).await()
 
+        runCatching {
+            val commercialRef = db.collection("commercial_profiles").document(uid)
+            if (commercialRef.get().await().exists()) {
+                commercialRef.update(
+                    mapOf(
+                        "status" to UserStatus.SUSPENDED.wireValue,
+                        "verifiedIdentity" to false,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        }
+
         val notifId = HatchFormatters.sanitizeFirestoreId("susp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
         db.collection("users_private").document(uid)
             .collection("notifications").document(notifId)
@@ -263,12 +276,24 @@ class MonetizationRepository @Inject constructor(
                 "updatedAt" to FieldValue.serverTimestamp()
             )
         ).await()
+        runCatching {
+            val commercialRef = db.collection("commercial_profiles").document(uid)
+            if (commercialRef.get().await().exists()) {
+                commercialRef.update(
+                    mapOf(
+                        "status" to UserStatus.ACTIVE.wireValue,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        }
     }
 
     suspend fun deleteUserAsAdmin(uid: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
         db.collection("users_public").document(uid).delete().await()
         runCatching { db.collection("users_private").document(uid).delete().await() }
+        runCatching { db.collection("commercial_profiles").document(uid).delete().await() }
     }
 
     suspend fun updateReportStatus(reportId: String, newStatus: String): Result<Unit> = runCatching {

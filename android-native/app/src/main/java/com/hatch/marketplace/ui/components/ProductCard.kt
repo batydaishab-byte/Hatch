@@ -43,6 +43,7 @@ import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.PaymentMethod
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
+import com.hatch.marketplace.data.model.resolvedSellerAccountType
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
@@ -202,6 +203,7 @@ fun ProductCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                val sellerType = product.resolvedSellerAccountType()
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -212,10 +214,31 @@ fun ProductCard(
                             model = product.sellerAvatar,
                             contentDescription = product.sellerName,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(18.dp).clip(CircleShape)
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(if (sellerType.isCommercial()) RoundedCornerShape(5.dp) else CircleShape)
                         )
                     }
-                    Text(text = product.sellerName, color = HatchTextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        text = product.sellerName,
+                        color = if (sellerType.isCommercial()) HatchAmber400 else HatchTextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = if (sellerType.isCommercial()) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (sellerType.isCommercial()) {
+                        Text(
+                            text = strings.accountTypeLabel(sellerType.wireValue),
+                            color = HatchAmber400,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(HatchAmber500.copy(alpha = 0.16f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
                     if (product.sellerVerified) {
                         Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchEmerald400, modifier = Modifier.size(12.dp))
                     }

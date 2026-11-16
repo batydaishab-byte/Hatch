@@ -133,4 +133,299 @@ class MarketplaceLogicTest {
         assertEquals(20.0, stats.estimatedUsd, 0.001)
         assertEquals(50_000.0, stats.estimatedSdg, 0.01)
     }
+
+    @Test
+    fun accountTypeFromWireNormalizesAndFallsBackToPersonalForLegacyUsers() {
+        assertEquals(AccountType.PERSONAL, AccountType.fromWire(null))
+        assertEquals(AccountType.PERSONAL, AccountType.fromWire(""))
+        assertEquals(AccountType.PERSONAL, AccountType.fromWire("unknown_type"))
+        assertEquals(AccountType.STORE, AccountType.fromWire(" STORE "))
+        assertEquals(AccountType.COMPANY, AccountType.fromWire("Company"))
+
+        val legacyUser = PublicUser(
+            uid = "u_legacy",
+            name = "محمد عثمان",
+            city = "الخرطوم (ولاية الخرطوم)",
+            dealsCompleted = 12,
+            verifiedIdentity = true
+        )
+        assertEquals(AccountType.PERSONAL, legacyUser.resolvedAccountType())
+        assertFalse(MarketplaceLogic.requiresOnboarding(legacyUser))
+        assertTrue(MarketplaceLogic.requiresOnboarding(PublicUser(uid = "u_new", name = "", city = "")))
+    }
+
+    @Test
+    fun buildSellerBrandSnapshotInheritsLogoAndActivityForCommercialAccountsOnly() {
+        val storeBrand = MarketplaceLogic.buildSellerBrandSnapshot(
+            name = "متجر النيل للهواتف",
+            avatar = "https://example.com/user.jpg",
+            businessLogo = "https://example.com/store-logo.png",
+            accountType = AccountType.STORE,
+            businessActivity = "بيع الهواتف والإكسسوارات"
+        )
+        assertEquals("متجر النيل للهواتف", storeBrand.sellerName)
+        assertEquals("https://example.com/store-logo.png", storeBrand.sellerAvatar)
+        assertEquals("store", storeBrand.sellerAccountType)
+        assertEquals("بيع الهواتف والإكسسوارات", storeBrand.sellerBusinessActivity)
+
+        val personalBrand = MarketplaceLogic.buildSellerBrandSnapshot(
+            name = "سارة حسن",
+            avatar = "https://example.com/sara.jpg",
+            businessLogo = "https://example.com/ignored-logo.png",
+            accountType = AccountType.PERSONAL,
+            businessActivity = "تجارة عامة"
+        )
+        assertEquals("https://example.com/sara.jpg", personalBrand.sellerAvatar)
+        assertEquals("personal", personalBrand.sellerAccountType)
+        assertEquals("", personalBrand.sellerBusinessActivity)
+    }
+
+    @Test
+    fun buildBusinessStorefrontProductsFiltersBySellerAndActiveStatus() {
+        val products = listOf(
+            Product(id = "a1", sellerId = "s1", status = ProductStatus.ACTIVE.wireValue, urgentSale = false),
+            Product(id = "a2", sellerId = "s1", status = ProductStatus.ACTIVE.wireValue, featured = true),
+            Product(id = "a3", sellerId = "s1", status = ProductStatus.SOLD.wireValue),
+            Product(id = "b1", sellerId = "s2", status = ProductStatus.ACTIVE.wireValue)
+        )
+        val storefront = MarketplaceLogic.buildBusinessStorefrontProducts(products, "s1")
+        assertEquals(listOf("a2", "a1"), storefront.map { it.id })
+    }
+
+    @Test
+    fun upgradingPersonalUserPreservesUidStatsAndVerification() {
+        val existing = PublicUser(
+            uid = "uid_fixed_123",
+            name = "أحمد علي",
+            avatar = "https://example.com/a.jpg",
+            city = "بورتسودان (ولاية البحر الأحمر)",
+            rating = 4.9,
+            dealsCompleted = 14,
+            verifiedIdentity = true,
+            accountType = AccountType.PERSONAL.wireValue
+        )
+        val upgraded = existing.copy(
+            name = "شركة البحر الأحمر للطاقة",
+            accountType = AccountType.COMPANY.wireValue,
+            businessActivity = "أنظمة الطاقة الشمسية",
+            businessLogo = "https://example.com/company-logo.png"
+        )
+        assertEquals("uid_fixed_123", upgraded.uid)
+        assertEquals(14, upgraded.dealsCompleted)
+        assertTrue(upgraded.verifiedIdentity)
+        assertEquals(4.9, upgraded.rating, 0.001)
+        assertEquals(AccountType.COMPANY, upgraded.resolvedAccountType())
+        assertEquals("https://example.com/company-logo.png", upgraded.displayLogoOrAvatar())
+    }
+
+    @Test
+    fun buildCommercialDirectorySeparatesStoresAndCompaniesPreservesZeroProductAccountsAndFallsBackForGuests() {
+        val users = listOf(
+            PublicUser(
+                uid = "u_personal",
+                name = "حساب شخصي",
+                city = "الخرطوم",
+                accountType = AccountType.PERSONAL.wireValue
+            ),
+            PublicUser(
+                uid = "u_store_1",
+                name = "متجر النيل",
+                city = "الخرطوم",
+                accountType = AccountType.STORE.wireValue,
+                businessActivity = "إلكترونيات",
+                businessLogo = "https://example.com/store1.png",
+                verifiedIdentity = true
+            ),
+            PublicUser(
+                uid = "u_store_empty",
+                name = "متجر جديد بلا منتجات",
+                city = "عطبرة",
+                accountType = AccountType.STORE.wireValue,
+                businessActivity = "أثاث"
+            ),
+            PublicUser(
+                uid = "u_company_1",
+                name = "شركة النور للطاقة",
+                city = "بورتسودان",
+                accountType = AccountType.COMPANY.wireValue,
+                businessActivity = "طاقة شمسية"
+            )
+        )
+        val products = listOf(
+            Product(
+                id = "p_store1",
+                sellerId = "u_store_1",
+                sellerName = "متجر النيل",
+                sellerAccountType = AccountType.STORE.wireValue,
+                status = ProductStatus.ACTIVE.wireValue
+            ),
+            Product(
+                id = "p_store1_sold",
+                sellerId = "u_store_1",
+                sellerName = "متجر النيل",
+                sellerAccountType = AccountType.STORE.wireValue,
+                status = ProductStatus.SOLD.wireValue
+            ),
+            Product(
+                id = "p_company1",
+                sellerId = "u_company_1",
+                sellerName = "شركة النور للطاقة",
+                sellerAccountType = AccountType.COMPANY.wireValue,
+                status = ProductStatus.ACTIVE.wireValue
+            ),
+            Product(
+                id = "p_personal",
+                sellerId = "u_personal",
+                sellerName = "حساب شخصي",
+                sellerAccountType = AccountType.PERSONAL.wireValue,
+                status = ProductStatus.ACTIVE.wireValue
+            )
+        )
+
+        val stores = MarketplaceLogic.buildCommercialDirectory(users, products, AccountType.STORE)
+        assertEquals(listOf("u_store_1", "u_store_empty"), stores.map { it.sellerId })
+        assertEquals(listOf("p_store1"), stores.first().products.map { it.id })
+        assertEquals("https://example.com/store1.png", stores.first().logoUrl)
+        assertTrue(stores.last().products.isEmpty())
+
+        val companies = MarketplaceLogic.buildCommercialDirectory(users, products, AccountType.COMPANY)
+        assertEquals(listOf("u_company_1"), companies.map { it.sellerId })
+        assertEquals(listOf("p_company1"), companies.first().products.map { it.id })
+
+        // Guest mode fallback (empty PublicUser list -> falls back to product seller snapshots)
+        val guestStores = MarketplaceLogic.buildCommercialDirectory(emptyList(), products, AccountType.STORE)
+        assertEquals(listOf("u_store_1"), guestStores.map { it.sellerId })
+
+        // Personal type returns empty commercial directory
+        assertTrue(MarketplaceLogic.buildCommercialDirectory(users, products, AccountType.PERSONAL).isEmpty())
+    }
+
+    @Test
+    fun guestModeAllowsBrowsingAndBlocksAllInteractiveAndContactActions() {
+        val allowed = listOf(
+            GuestAction.BROWSE_MARKET,
+            GuestAction.BROWSE_SWIPE_DECK,
+            GuestAction.VIEW_PRODUCT_DETAIL,
+            GuestAction.VIEW_COMMERCIAL_DIRECTORY,
+            GuestAction.VIEW_BUSINESS_PROFILE,
+            GuestAction.SEARCH_OR_FILTER
+        )
+        allowed.forEach { action ->
+            assertTrue("Expected $action to be allowed for guest", MarketplaceLogic.isActionAllowedForGuest(action))
+        }
+
+        val blocked = listOf(
+            GuestAction.PUBLISH_LISTING,
+            GuestAction.EDIT_OR_DELETE_LISTING,
+            GuestAction.MAKE_OFFER_OR_BUY,
+            GuestAction.CHAT_OR_MESSAGE,
+            GuestAction.DIRECT_CONTACT_OR_CALL,
+            GuestAction.TOGGLE_FAVORITE,
+            GuestAction.RATE_OR_REVIEW,
+            GuestAction.REPORT_VIOLATION,
+            GuestAction.WATCH_REWARD_OR_BOOST
+        )
+        blocked.forEach { action ->
+            assertFalse("Expected $action to be blocked for guest", MarketplaceLogic.isActionAllowedForGuest(action))
+        }
+
+        assertEquals(GuestPromptReason.SELL, MarketplaceLogic.guestPromptReasonFor(GuestAction.PUBLISH_LISTING))
+        assertEquals(GuestPromptReason.OFFER_NEGOTIATE, MarketplaceLogic.guestPromptReasonFor(GuestAction.MAKE_OFFER_OR_BUY))
+        assertEquals(GuestPromptReason.CONTACT_OR_BUY, MarketplaceLogic.guestPromptReasonFor(GuestAction.CHAT_OR_MESSAGE))
+        assertEquals(GuestPromptReason.CONTACT_OR_BUY, MarketplaceLogic.guestPromptReasonFor(GuestAction.DIRECT_CONTACT_OR_CALL))
+        assertEquals(GuestPromptReason.FAVORITES, MarketplaceLogic.guestPromptReasonFor(GuestAction.TOGGLE_FAVORITE))
+        assertEquals(GuestPromptReason.RATE_OR_REPORT, MarketplaceLogic.guestPromptReasonFor(GuestAction.REPORT_VIOLATION))
+    }
+
+    @Test
+    fun guestDirectoryDisplaysRegisteredStoresAndCompaniesWithZeroProductsAndZeroPii() {
+        val commercialFeedForGuest = listOfNotNull(
+            MarketplaceLogic.sanitizeCommercialProfileForGuest(
+                PublicUser(
+                    uid = "store_zero",
+                    name = "متجر البحر الأحمر",
+                    city = "بورتسودان (ولاية البحر الأحمر)",
+                    accountType = AccountType.STORE.wireValue,
+                    businessActivity = "أجهزة منزلية",
+                    businessLogo = "https://example.com/redsea.png",
+                    status = UserStatus.ACTIVE.wireValue
+                )
+            ),
+            MarketplaceLogic.sanitizeCommercialProfileForGuest(
+                PublicUser(
+                    uid = "company_zero",
+                    name = "شركة الخرطوم للطاقة",
+                    city = "الخرطوم (ولاية الخرطوم)",
+                    accountType = AccountType.COMPANY.wireValue,
+                    businessActivity = "طاقة شمسية",
+                    businessLogo = "https://example.com/krt-solar.png",
+                    status = UserStatus.ACTIVE.wireValue
+                )
+            ),
+            // Personal or suspended users must never leak into guest commercial profiles
+            MarketplaceLogic.sanitizeCommercialProfileForGuest(
+                PublicUser(
+                    uid = "personal_leak",
+                    name = "مستخدم شخصي",
+                    city = "الخرطوم",
+                    accountType = AccountType.PERSONAL.wireValue,
+                    status = UserStatus.ACTIVE.wireValue
+                )
+            ),
+            MarketplaceLogic.sanitizeCommercialProfileForGuest(
+                PublicUser(
+                    uid = "suspended_store",
+                    name = "متجر موقوف",
+                    city = "عطبرة",
+                    accountType = AccountType.STORE.wireValue,
+                    status = UserStatus.SUSPENDED.wireValue,
+                    suspensionReason = "Private moderation note"
+                )
+            )
+        )
+
+        val mergedForGuest = MarketplaceLogic.mergeUsersAndCommercialProfiles(
+            publicUsers = emptyList(),
+            commercialProfiles = commercialFeedForGuest,
+            currentUser = null
+        )
+
+        val products = listOf(
+            Product(
+                id = "p_pers",
+                titleAr = "هاتف شخصي",
+                sellerId = "personal_seller",
+                sellerName = "بائع شخصي",
+                sellerAccountType = AccountType.PERSONAL.wireValue,
+                status = ProductStatus.ACTIVE.wireValue
+            ),
+            Product(
+                id = "p_store_prod",
+                titleAr = "هاتف من متجر",
+                sellerId = "store_with_items",
+                sellerName = "متجر النيل",
+                sellerAccountType = AccountType.STORE.wireValue,
+                status = ProductStatus.ACTIVE.wireValue
+            )
+        )
+
+        // Market mix includes both personal and commercial active items for guests
+        val guestMarket = MarketplaceLogic.filterProducts(products, MarketFilterState(), activeOnly = true)
+        assertEquals(listOf("p_pers", "p_store_prod"), guestMarket.map { it.id })
+
+        // Guest Store directory includes 0-product registered store alongside stores with products
+        val storeDir = MarketplaceLogic.buildCommercialDirectory(mergedForGuest, products, AccountType.STORE)
+        assertTrue(storeDir.any { it.sellerId == "store_zero" && it.products.isEmpty() })
+        assertTrue(storeDir.any { it.sellerId == "store_with_items" && it.products.size == 1 })
+        assertFalse(storeDir.any { it.sellerId == "suspended_store" || it.sellerId == "personal_leak" })
+
+        // Guest Company directory includes 0-product registered company
+        val companyDir = MarketplaceLogic.buildCommercialDirectory(mergedForGuest, products, AccountType.COMPANY)
+        assertEquals(listOf("company_zero"), companyDir.map { it.sellerId })
+        assertTrue(companyDir.first().products.isEmpty())
+
+        // Verify CommercialDirectoryEntry exposes zero phone/email/whatsapp fields
+        val fieldNames = CommercialDirectoryEntry::class.java.declaredFields.map { it.name.lowercase() }
+        assertFalse(fieldNames.any { it.contains("phone") || it.contains("email") || it.contains("whatsapp") || it.contains("suspension") })
+    }
 }

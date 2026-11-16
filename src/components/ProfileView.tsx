@@ -19,10 +19,15 @@ import {
   CheckCircle2,
   Check,
   UserPlus,
-  Clock
+  Clock,
+  Store,
+  Building2,
+  ArrowUpCircle,
+  Briefcase,
+  LogOut
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Product } from '../types';
+import { Product, resolveAccountType } from '../types';
 import { ProductCard } from './ProductCard';
 import { EditListingModal } from './EditListingModal';
 import { SoldConfirmModal } from './SoldConfirmModal';
@@ -40,10 +45,17 @@ export const ProfileView: React.FC = () => {
     setIsApkModalOpen,
     setIsCreateAccountOpen,
     setIsEditProfileOpen,
+    openBusinessProfile,
+    firebaseUser,
+    signInWithGoogle,
+    signOutGoogle,
     openReviewModal,
     t, 
     language 
   } = useApp();
+
+  const currentAccountType = resolveAccountType(currentUser.accountType);
+  const isCommercial = currentAccountType === 'store' || currentAccountType === 'company';
 
   const [activeSubTab, setActiveSubTab] = useState<'my_ads' | 'sold_ads' | 'saved' | 'safety'>('my_ads');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -101,6 +113,26 @@ export const ProfileView: React.FC = () => {
             <UserPlus className="w-3.5 h-3.5 text-amber-400" />
             <span>{t.nearAccountBadge} +</span>
           </button>
+
+          {firebaseUser ? (
+            <button
+              type="button"
+              onClick={signOutGoogle}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-all cursor-pointer whitespace-nowrap"
+              title={t.logout}
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400" />
+              <span>{t.logout}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border border-white/20 bg-white text-neutral-900 hover:bg-neutral-100 transition-all cursor-pointer whitespace-nowrap"
+            >
+              <span>Google</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -228,6 +260,32 @@ export const ProfileView: React.FC = () => {
                     <span>{t.editProfile}</span>
                   </button>
 
+                  {/* علامة ترقية الحساب أو عرض الصفحة التجارية */}
+                  {isCommercial ? (
+                    <button
+                      type="button"
+                      onClick={() => openBusinessProfile(currentUser.id)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                    >
+                      {currentAccountType === 'company' ? (
+                        <Building2 className="w-3.5 h-3.5 text-sky-400" />
+                      ) : (
+                        <Store className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                      <span>{t.myCommercialPageBtn}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditProfileOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm transition-all hover:scale-105 active:scale-95 cursor-pointer"
+                      title={t.upgradeAccountTitle}
+                    >
+                      <ArrowUpCircle className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{t.upgradeAccountTitle}</span>
+                    </button>
+                  )}
+
                   {/* علامة إنشاء حساب بالقرب من حساب المستخدم */}
                   <button
                     type="button"
@@ -239,6 +297,44 @@ export const ProfileView: React.FC = () => {
                     <span>{t.nearAccountBadge}</span>
                   </button>
                 </div>
+
+                {/* Account Type & Business Activity Row */}
+                <div className="flex items-center justify-center sm:justify-start gap-2 mt-1.5 flex-wrap">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                      currentAccountType === 'company'
+                        ? 'bg-sky-500/15 text-sky-300 border-sky-500/40'
+                        : currentAccountType === 'store'
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                        : 'bg-neutral-800 text-neutral-300 border-neutral-700'
+                    }`}
+                  >
+                    {currentAccountType === 'company' ? (
+                      <>
+                        <Building2 className="w-3 h-3" />
+                        <span>{t.accountTypeCompany}</span>
+                      </>
+                    ) : currentAccountType === 'store' ? (
+                      <>
+                        <Store className="w-3 h-3" />
+                        <span>{t.accountTypeStore}</span>
+                      </>
+                    ) : (
+                      <>
+                        <User className="w-3 h-3" />
+                        <span>{t.accountTypePersonal}</span>
+                      </>
+                    )}
+                  </span>
+
+                  {isCommercial && currentUser.businessActivity && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 rounded-full">
+                      <Briefcase className="w-3 h-3 text-amber-400" />
+                      <span>{currentUser.businessActivity}</span>
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex items-center justify-center sm:justify-start gap-3 text-xs text-neutral-400 mt-1">
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5 text-amber-400" />

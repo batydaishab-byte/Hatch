@@ -28,8 +28,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
@@ -39,9 +42,11 @@ import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
@@ -66,6 +71,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AdMobConfig
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.HatchFormatters
@@ -73,6 +79,7 @@ import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.UserReview
+import com.hatch.marketplace.data.model.resolvedSellerAccountType
 import com.hatch.marketplace.ui.components.AdMobBannerCard
 import com.hatch.marketplace.ui.components.BadgePill
 import com.hatch.marketplace.ui.i18n.HatchStrings
@@ -99,6 +106,7 @@ fun ProductDetailSheet(
     product: Product,
     isFavorite: Boolean,
     isOwner: Boolean,
+    isSignedIn: Boolean = true,
     sellerReviews: List<UserReview>,
     sponsoredAds: List<SponsoredAdItem>,
     adConfig: AdMobConfig,
@@ -112,6 +120,7 @@ fun ProductDetailSheet(
     onMarkSold: () -> Unit,
     onOpenReview: (ReviewRequest) -> Unit,
     onOpenReport: (ReportRequest) -> Unit,
+    onOpenBusinessProfile: (String) -> Unit = {},
     onAdImpression: (String) -> Unit,
     onAdClick: (SponsoredAdItem) -> Unit,
     onCopiedToast: (String) -> Unit
@@ -323,12 +332,20 @@ fun ProductDetailSheet(
                         }
 
                         // Seller Info Card
+                        val sellerType = product.resolvedSellerAccountType()
+                        val isCommercialSeller = sellerType.isCommercial()
+                        val sellerActivity = product.sellerBusinessActivity?.takeIf { it.isNotBlank() }
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(16.dp))
                                 .background(HatchSurfaceDark)
-                                .border(1.dp, HatchBorderDark, RoundedCornerShape(16.dp))
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isCommercialSeller) HatchAmber500.copy(alpha = 0.4f) else HatchBorderDark,
+                                    shape = RoundedCornerShape(16.dp)
+                                )
                                 .padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
@@ -337,21 +354,56 @@ fun ProductDetailSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .then(
+                                            if (isCommercialSeller) {
+                                                Modifier
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .clickable { onOpenBusinessProfile(product.sellerId) }
+                                                    .padding(vertical = 2.dp)
+                                            } else Modifier
+                                        )
+                                ) {
                                     if (product.sellerAvatar.isNotBlank()) {
                                         AsyncImage(
                                             model = product.sellerAvatar,
                                             contentDescription = product.sellerName,
                                             contentScale = ContentScale.Crop,
-                                            modifier = Modifier.size(44.dp).clip(CircleShape)
+                                            modifier = Modifier
+                                                .size(46.dp)
+                                                .clip(if (isCommercialSeller) RoundedCornerShape(12.dp) else CircleShape)
+                                                .border(
+                                                    width = if (isCommercialSeller) 1.5.dp else 1.dp,
+                                                    color = if (isCommercialSeller) HatchAmber500 else HatchBorderDark,
+                                                    shape = if (isCommercialSeller) RoundedCornerShape(12.dp) else CircleShape
+                                                )
                                         )
                                     }
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                             Text(product.sellerName, color = HatchTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                             if (product.sellerVerified) {
                                                 Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
                                             }
+                                            if (isCommercialSeller) {
+                                                BadgePill(
+                                                    text = strings.accountTypeLabel(sellerType.wireValue),
+                                                    bg = HatchAmber500.copy(alpha = 0.2f),
+                                                    fg = HatchAmber400
+                                                )
+                                            }
+                                        }
+                                        if (isCommercialSeller && sellerActivity != null) {
+                                            Text(
+                                                text = sellerActivity,
+                                                color = HatchEmerald400,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
                                         }
                                         Text(
                                             text = "⭐ ${String.format(java.util.Locale.US, "%.1f", product.sellerRating)} • ${product.sellerDealsCount} ${if (language == AppLanguage.AR) "صفقة مكتملة" else "deals"}",
@@ -379,6 +431,41 @@ fun ProductDetailSheet(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(strings.rateSeller, color = HatchAmber400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
+                                }
+                            }
+
+                            if (isCommercialSeller) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(HatchAmber500.copy(alpha = 0.12f))
+                                        .border(1.dp, HatchAmber500.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                        .clickable { onOpenBusinessProfile(product.sellerId) }
+                                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        Icon(
+                                            imageVector = if (sellerType == AccountType.COMPANY) Icons.Rounded.Business else Icons.Rounded.Storefront,
+                                            contentDescription = null,
+                                            tint = HatchAmber400,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = strings.viewStorefrontLabel,
+                                            color = HatchAmber400,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Black
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = if (language == AppLanguage.AR) Icons.Rounded.ChevronLeft else Icons.Rounded.ChevronRight,
+                                        contentDescription = null,
+                                        tint = HatchAmber400,
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
                             }
 
@@ -507,24 +594,47 @@ fun ProductDetailSheet(
                             }
                         }
                     } else if (product.status == ProductStatus.ACTIVE.wireValue) {
-                        OutlinedButton(
-                            onClick = onMakeOffer,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.LocalOffer, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.makeOffer, color = HatchAmber400, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                        Button(
-                            onClick = onStartChat,
-                            colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1.2f)
-                        ) {
-                            Icon(Icons.Rounded.ChatBubble, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.chatSeller, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        if (isSignedIn) {
+                            OutlinedButton(
+                                onClick = onMakeOffer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.LocalOffer, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(strings.makeOffer, color = HatchAmber400, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = onStartChat,
+                                colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1.2f)
+                            ) {
+                                Icon(Icons.Rounded.ChatBubble, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(strings.chatSeller, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(HatchCardElevated)
+                                    .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                    .clickable { onStartChat() }
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Rounded.Lock, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = strings.guestDetailSignInToContact,
+                                    color = HatchAmber400,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 }

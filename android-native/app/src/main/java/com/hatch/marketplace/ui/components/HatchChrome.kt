@@ -80,6 +80,7 @@ import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.ToastType
 import com.hatch.marketplace.data.model.UiToast
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber300
 import com.hatch.marketplace.ui.theme.HatchAmber400
@@ -252,9 +253,10 @@ fun HatchHeader(
                         .clickable { onOpenAuthOrProfile() },
                     contentAlignment = Alignment.Center
                 ) {
-                    if (currentUser != null && currentUser.avatar.isNotBlank()) {
+                    val headerAvatar = currentUser?.displayLogoOrAvatar().orEmpty()
+                    if (currentUser != null && headerAvatar.isNotBlank()) {
                         AsyncImage(
-                            model = currentUser.avatar,
+                            model = headerAvatar,
                             contentDescription = currentUser.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()

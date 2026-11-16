@@ -9,10 +9,13 @@ import {
   Flame, 
   Truck, 
   Sparkles, 
-  Image as ImageIcon 
+  Image as ImageIcon,
+  Store,
+  Building2,
+  User as UserIcon
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { CategoryId, SudaneseCity, Condition, PaymentMethod, SUDANESE_CITIES } from '../types';
+import { CategoryId, SudaneseCity, Condition, PaymentMethod, SUDANESE_CITIES, resolveAccountType } from '../types';
 import { readyImagePresets } from '../data/mockData';
 
 export const SellModal: React.FC = () => {
@@ -29,7 +32,7 @@ export const SellModal: React.FC = () => {
   const [titleEn, setTitleEn] = useState('');
   const [category, setCategory] = useState<CategoryId>('phones');
   const [condition, setCondition] = useState<Condition>('like_new');
-  const [city, setCity] = useState<SudaneseCity>(SUDANESE_CITIES[0]);
+  const [city, setCity] = useState<SudaneseCity>(currentUser.city || SUDANESE_CITIES[0]);
   const [areaAr, setAreaAr] = useState('حي الشاطئ');
   const [price, setPrice] = useState<number | ''>('');
   const [originalPrice, setOriginalPrice] = useState<number | ''>('');
@@ -76,6 +79,8 @@ export const SellModal: React.FC = () => {
     e.preventDefault();
     if (!titleAr.trim() || !price || images.length === 0) return;
 
+    const sellerType = resolveAccountType(currentUser.accountType);
+
     addProduct({
       titleAr: titleAr.trim(),
       titleEn: titleEn.trim() || titleAr.trim(),
@@ -91,11 +96,13 @@ export const SellModal: React.FC = () => {
       images: images.length > 0 ? images : [readyImagePresets[0].url],
       sellerId: currentUser.id,
       sellerName: currentUser.name,
-      sellerAvatar: currentUser.avatar,
+      sellerAvatar: currentUser.businessLogo || currentUser.avatar,
       sellerPhone: currentUser.phone,
       sellerRating: currentUser.rating,
       sellerDealsCount: currentUser.dealsCompleted,
       sellerVerified: currentUser.verifiedIdentity,
+      sellerAccountType: sellerType,
+      sellerBusinessActivity: currentUser.businessActivity,
       paymentMethods: paymentMethods.length > 0 ? paymentMethods : ['bankak', 'cash'],
       negotiable,
       deliveryAvailable,
@@ -131,6 +138,43 @@ export const SellModal: React.FC = () => {
 
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="overflow-y-auto flex-1 p-4 sm:p-6 space-y-5 no-scrollbar">
+          {/* Publisher Account Identity Banner (Auto-filled from store/company/personal account) */}
+          <div className="p-3 rounded-2xl bg-neutral-950/80 border border-neutral-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <img
+                src={currentUser.businessLogo || currentUser.avatar}
+                alt={currentUser.name}
+                className="w-9 h-9 rounded-xl object-cover ring-1 ring-amber-400/60 shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs font-black text-white truncate">{currentUser.name}</span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    {resolveAccountType(currentUser.accountType) === 'store' ? (
+                      <>
+                        <Store className="w-3 h-3" />
+                        <span>{t.commercialBadgeStore}</span>
+                      </>
+                    ) : resolveAccountType(currentUser.accountType) === 'company' ? (
+                      <>
+                        <Building2 className="w-3 h-3" />
+                        <span>{t.commercialBadgeCompany}</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserIcon className="w-3 h-3" />
+                        <span>{t.commercialBadgePersonal}</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+                {currentUser.businessActivity && (
+                  <p className="text-[11px] text-neutral-400 truncate">{currentUser.businessActivity}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Images Section */}
           <div>
             <div className="flex items-center justify-between mb-2">

@@ -12,6 +12,7 @@ import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.PublicUser
+import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -149,6 +150,14 @@ class ProductRepository @Inject constructor(
         require(resolvedUrls.isNotEmpty()) { "Please add at least one valid product photo." }
         if (thumbnailUrl == null) thumbnailUrl = resolvedUrls.first()
 
+        val brand = MarketplaceLogic.buildSellerBrandSnapshot(
+            name = seller.name,
+            avatar = seller.avatar,
+            businessLogo = seller.businessLogo,
+            accountType = seller.resolvedAccountType(),
+            businessActivity = seller.businessActivity
+        )
+
         val docId = HatchFormatters.sanitizeFirestoreId("prod_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val payload = hashMapOf<String, Any>(
             "id" to docId,
@@ -165,11 +174,12 @@ class ProductRepository @Inject constructor(
             "images" to resolvedUrls.take(5),
             "thumbnailUrl" to thumbnailUrl,
             "sellerId" to seller.uid,
-            "sellerName" to seller.name.ifBlank { "تاجر هتش" },
-            "sellerAvatar" to seller.avatar,
+            "sellerName" to brand.sellerName,
+            "sellerAvatar" to brand.sellerAvatar,
             "sellerRating" to seller.rating,
             "sellerDealsCount" to seller.dealsCompleted,
             "sellerVerified" to seller.verifiedIdentity,
+            "sellerAccountType" to brand.sellerAccountType,
             "paymentMethods" to paymentMethods.distinct(),
             "negotiable" to negotiable,
             "deliveryAvailable" to deliveryAvailable,
@@ -181,6 +191,9 @@ class ProductRepository @Inject constructor(
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        if (brand.sellerBusinessActivity.isNotEmpty()) {
+            payload["sellerBusinessActivity"] = brand.sellerBusinessActivity
+        }
         if (originalPrice != null && originalPrice > price) {
             payload["originalPrice"] = originalPrice
         }
@@ -208,6 +221,7 @@ class ProductRepository @Inject constructor(
         urgentSale: Boolean
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        clients.auth?.currentUser ?: error("Authentication required")
         require(titleAr.trim().length in 2..120) { "Title must be 2 to 120 characters." }
         require(descriptionAr.trim().length in 5..2000) { "Description must be 5 to 2000 characters." }
         require(price > 0.0) { "Price must be positive." }
@@ -238,8 +252,11 @@ class ProductRepository @Inject constructor(
 
     suspend fun markProductAsSold(productId: String, sellerId: String): Result<Boolean> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == sellerId) { "Seller UID mismatch." }
         val productRef = db.collection("products").document(productId)
         val userRef = db.collection("users_public").document(sellerId)
+        val commercialRef = db.collection("commercial_profiles").document(sellerId)
 
         productRef.update(
             mapOf(
@@ -250,25 +267,29 @@ class ProductRepository @Inject constructor(
 
         db.runTransaction { tx ->
             val userSnap = tx.get(userRef)
+            val commercialSnap = tx.get(commercialRef)
             val currentDeals = (userSnap.getLong("dealsCompleted") ?: 0L).toInt()
             val reportsCount = (userSnap.getLong("reportsCount") ?: 0L).toInt()
             val wasVerified = userSnap.getBoolean("verifiedIdentity") ?: false
             val nextDeals = currentDeals + 1
             val shouldVerify = MarketplaceLogic.shouldAutoVerify(nextDeals, reportsCount)
-            tx.update(
-                userRef,
-                mapOf(
-                    "dealsCompleted" to nextDeals,
-                    "verifiedIdentity" to shouldVerify,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
+            val updatePayload = mapOf(
+                "dealsCompleted" to nextDeals,
+                "verifiedIdentity" to shouldVerify,
+                "updatedAt" to FieldValue.serverTimestamp()
             )
+            tx.update(userRef, updatePayload)
+            if (commercialSnap.exists()) {
+                tx.update(commercialRef, updatePayload)
+            }
             !wasVerified && shouldVerify
         }.await()
     }
 
     suspend fun featureProductWithCredit(productId: String, ownerUid: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == ownerUid) { "Owner UID mismatch." }
         val privateRef = db.collection("users_private").document(ownerUid)
         val productRef = db.collection("products").document(productId)
 
@@ -295,6 +316,7 @@ class ProductRepository @Inject constructor(
 
     suspend fun deleteProduct(productId: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        clients.auth?.currentUser ?: error("Authentication required")
         db.collection("products").document(productId).delete().await()
     }
 
@@ -320,6 +342,7 @@ class ProductRepository @Inject constructor(
     }
 
     suspend fun uploadSingleInspectionOrAvatarImage(uri: Uri): Result<String> = runCatching {
+        clients.auth?.currentUser ?: error("Authentication required")
         require(BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")) {
             "Image upload requires signed worker URL (MEDIA_SIGNER_URL)."
         }

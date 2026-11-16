@@ -34,9 +34,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -73,13 +75,17 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.hatch.marketplace.BuildConfig
 import com.hatch.marketplace.data.media.MediaUploadPolicy
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.CategoryId
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.PaymentMethod
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductCondition
+import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.SudaneseCities
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
+import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
@@ -98,6 +104,7 @@ import java.io.File
 @Composable
 fun SellModal(
     defaultCity: String,
+    currentUser: PublicUser? = null,
     isSubmitting: Boolean,
     language: AppLanguage,
     strings: HatchStrings,
@@ -198,6 +205,48 @@ fun SellModal(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    val publisherType = currentUser?.resolvedAccountType() ?: AccountType.PERSONAL
+                    if (currentUser != null && publisherType.isCommercial()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(HatchSurfaceDark)
+                                .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            val logoUrl = currentUser.displayLogoOrAvatar()
+                            if (logoUrl.isNotBlank()) {
+                                AsyncImage(
+                                    model = logoUrl,
+                                    contentDescription = currentUser.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = if (publisherType == AccountType.COMPANY) Icons.Rounded.Business else Icons.Rounded.Storefront,
+                                    contentDescription = null,
+                                    tint = HatchAmber400,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${if (language == AppLanguage.AR) "النشر باسم" else "Publishing as"} ${strings.accountTypeLabel(publisherType.wireValue)}: ${currentUser.name}",
+                                    color = HatchAmber400,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                currentUser.businessActivity?.takeIf { it.isNotBlank() }?.let { act ->
+                                    Text(text = act, color = HatchTextMuted, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
                     // Photos Section
                     Text(
                         text = if (language == AppLanguage.AR) "صور المنتج (حد أقصى 5 صور — تُضغط تلقائياً إلى WebP)" else "Product Photos (max 5 — compressed to WebP)",

@@ -21,7 +21,7 @@ class InteractionRepository @Inject constructor(
 ) {
     fun observeFavoriteIds(userId: String?): Flow<Set<String>> = callbackFlow {
         val db = clients.firestore
-        if (db == null || userId.isNullOrBlank()) {
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptySet())
             awaitClose {}
             return@callbackFlow
@@ -36,6 +36,8 @@ class InteractionRepository @Inject constructor(
 
     suspend fun toggleFavorite(userId: String, productId: String, currentlyFavorite: Boolean): Result<Boolean> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == userId) { "Authenticated user mismatch." }
         val favRef = db.collection("users_private").document(userId)
             .collection("favorites").document(productId)
         val productRef = db.collection("products").document(productId)
@@ -73,7 +75,8 @@ class InteractionRepository @Inject constructor(
 
     suspend fun recordSwipe(userId: String, productId: String, action: String) {
         val db = clients.firestore ?: return
-        if (action !in listOf("left", "right", "superlike")) return
+        val authUid = clients.auth?.currentUser?.uid ?: return
+        if (authUid != userId || action !in listOf("left", "right", "superlike")) return
         runCatching {
             db.collection("users_private").document(userId)
                 .collection("swipes").document(productId)
@@ -89,7 +92,7 @@ class InteractionRepository @Inject constructor(
 
     fun observeNotifications(userId: String?): Flow<List<NotificationItem>> = callbackFlow {
         val db = clients.firestore
-        if (db == null || userId.isNullOrBlank()) {
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
@@ -134,6 +137,8 @@ class InteractionRepository @Inject constructor(
 
     suspend fun markPersonalNotificationRead(userId: String, notificationId: String) {
         val db = clients.firestore ?: return
+        val authUid = clients.auth?.currentUser?.uid ?: return
+        if (authUid != userId) return
         runCatching {
             db.collection("users_private").document(userId)
                 .collection("notifications").document(notificationId)
@@ -172,6 +177,8 @@ class InteractionRepository @Inject constructor(
         productTitle: String?
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == reviewerId) { "Authenticated user mismatch." }
         require(sellerId != reviewerId) { "You cannot review your own account." }
         require(rating in 1..5) { "Rating must be between 1 and 5." }
         val cleanComment = comment.trim().take(600)
@@ -197,7 +204,7 @@ class InteractionRepository @Inject constructor(
 
     fun observeReports(userId: String?, isVerifiedAdminEmail: Boolean): Flow<List<ReportTicket>> = callbackFlow {
         val db = clients.firestore
-        if (db == null || userId.isNullOrBlank()) {
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
@@ -228,6 +235,8 @@ class InteractionRepository @Inject constructor(
         flagListing: Boolean
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == reporterId) { "Authenticated user mismatch." }
         val cleanMessage = message.trim().take(1500)
         require(cleanMessage.length >= 5) { "Report details must be at least 5 characters." }
 

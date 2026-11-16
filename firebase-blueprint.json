@@ -17,10 +17,35 @@
         "suspendedUntil": { "type": "string", "maxLength": 64 },
         "suspensionDays": { "type": "integer" },
         "suspensionReason": { "type": "string", "maxLength": 500 },
+        "accountType": { "type": "string", "enum": ["personal", "store", "company"], "description": "Account category (missing treated as personal)" },
+        "businessActivity": { "type": "string", "minLength": 0, "maxLength": 120, "description": "Store activity type or company business field" },
+        "businessLogo": { "type": "string", "minLength": 0, "maxLength": 1000, "description": "Store or company logo URL" },
         "joinedDate": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "name", "city", "rating", "dealsCompleted", "verifiedIdentity", "status", "joinedDate", "updatedAt"]
+    },
+    "CommercialProfile": {
+      "title": "CommercialProfile",
+      "description": "Public read-only Store and Company storefront metadata (zero PII) readable in Guest Mode",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "avatar": { "type": "string", "minLength": 0, "maxLength": 1000 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "rating": { "type": "number" },
+        "dealsCompleted": { "type": "integer" },
+        "reportsCount": { "type": "integer" },
+        "verifiedIdentity": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "accountType": { "type": "string", "enum": ["store", "company"] },
+        "businessActivity": { "type": "string", "minLength": 0, "maxLength": 120 },
+        "businessLogo": { "type": "string", "minLength": 0, "maxLength": 1000 },
+        "joinedDate": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "city", "rating", "dealsCompleted", "verifiedIdentity", "status", "accountType", "joinedDate", "updatedAt"]
     },
     "PrivateUser": {
       "title": "PrivateUser",
@@ -66,6 +91,8 @@
         "sellerRating": { "type": "number" },
         "sellerDealsCount": { "type": "integer" },
         "sellerVerified": { "type": "boolean" },
+        "sellerAccountType": { "type": "string", "enum": ["personal", "store", "company"] },
+        "sellerBusinessActivity": { "type": "string", "minLength": 0, "maxLength": 120 },
         "paymentMethods": { "type": "array", "description": "Up to 4 methods: bankak, fawry, cash, ocash" },
         "negotiable": { "type": "boolean" },
         "deliveryAvailable": { "type": "boolean" },
@@ -278,6 +305,10 @@
     "/users_public/{userId}": {
       "schema": { "$ref": "#/entities/PublicUser" },
       "description": "Public profile attributes safe for display in marketplace listings and chat"
+    },
+    "/commercial_profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/CommercialProfile" },
+      "description": "Guest-readable public directory of registered Stores and Companies without PII"
     },
     "/users_private/{userId}": {
       "schema": { "$ref": "#/entities/PrivateUser" },

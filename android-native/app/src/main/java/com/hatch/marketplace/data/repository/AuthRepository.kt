@@ -7,10 +7,13 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
+import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.PrivateUser
+import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.UserStatus
+import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -246,15 +249,34 @@ class AuthRepository @Inject constructor(
         name: String,
         phone: String,
         city: String,
-        avatar: String
+        avatar: String,
+        accountType: String = AccountType.PERSONAL.wireValue,
+        businessActivity: String = "",
+        businessLogo: String = ""
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val resolvedType = AccountType.fromWire(accountType)
         val cleanName = name.trim().take(80)
         require(cleanName.length >= 2) { "Name must be at least 2 characters." }
         val cleanCity = city.trim().take(100)
         require(cleanCity.length >= 2) { "Please select a valid city." }
         val cleanPhone = phone.trim().ifBlank { "+249000000000" }.take(32)
         require(cleanPhone.length >= 6) { "Phone number must be at least 6 characters." }
+
+        val cleanActivity = if (resolvedType.isCommercial()) businessActivity.trim().take(120) else ""
+        if (resolvedType.isCommercial()) {
+            require(cleanActivity.length >= 2) { "Business activity / field is required." }
+        }
+        val cleanLogo = if (resolvedType.isCommercial()) {
+            businessLogo.trim().ifBlank { avatar }.take(1000)
+        } else {
+            ""
+        }
+        val effectiveAvatar = if (resolvedType.isCommercial() && cleanLogo.isNotBlank()) {
+            cleanLogo
+        } else {
+            avatar.trim().take(1000)
+        }
 
         val publicRef = db.collection("users_public").document(uid)
         val privateRef = db.collection("users_private").document(uid)
@@ -264,23 +286,33 @@ class AuthRepository @Inject constructor(
             val publicPayload = hashMapOf<String, Any>(
                 "uid" to uid,
                 "name" to cleanName,
-                "avatar" to avatar,
+                "avatar" to effectiveAvatar,
                 "city" to cleanCity,
                 "rating" to 5.0,
                 "dealsCompleted" to 0,
                 "reportsCount" to 0,
                 "verifiedIdentity" to false,
                 "status" to UserStatus.ACTIVE.wireValue,
+                "accountType" to resolvedType.wireValue,
                 "joinedDate" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
+            if (cleanActivity.isNotEmpty()) {
+                publicPayload["businessActivity"] = cleanActivity
+            }
+            if (cleanLogo.isNotEmpty()) {
+                publicPayload["businessLogo"] = cleanLogo
+            }
             publicRef.set(publicPayload).await()
         } else {
             publicRef.update(
                 mapOf(
                     "name" to cleanName,
-                    "avatar" to avatar,
+                    "avatar" to effectiveAvatar,
                     "city" to cleanCity,
+                    "accountType" to resolvedType.wireValue,
+                    "businessActivity" to cleanActivity,
+                    "businessLogo" to cleanLogo,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             ).await()
@@ -307,6 +339,16 @@ class AuthRepository @Inject constructor(
                 )
             ).await()
         }
+
+        syncCommercialProfileDoc(
+            uid = uid,
+            resolvedType = resolvedType,
+            cleanName = cleanName,
+            effectiveAvatar = effectiveAvatar,
+            cleanCity = cleanCity,
+            cleanActivity = cleanActivity,
+            cleanLogo = cleanLogo
+        )
     }
 
     suspend fun updateProfile(
@@ -314,9 +356,13 @@ class AuthRepository @Inject constructor(
         name: String,
         phone: String,
         city: String,
-        avatar: String
+        avatar: String,
+        accountType: String = AccountType.PERSONAL.wireValue,
+        businessActivity: String = "",
+        businessLogo: String = ""
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val resolvedType = AccountType.fromWire(accountType)
         val cleanName = name.trim().take(80)
         require(cleanName.length >= 2) { "Name must be at least 2 characters." }
         val cleanCity = city.trim().take(100)
@@ -324,11 +370,31 @@ class AuthRepository @Inject constructor(
         val cleanPhone = phone.trim().take(32)
         require(cleanPhone.length >= 6) { "Valid phone number is required." }
 
+        val cleanActivity = if (resolvedType.isCommercial()) businessActivity.trim().take(120) else ""
+        if (resolvedType.isCommercial()) {
+            require(cleanActivity.length >= 2) { "Business activity / field is required." }
+        }
+        val cleanLogo = if (resolvedType.isCommercial()) {
+            businessLogo.trim().ifBlank { avatar }.take(1000)
+        } else {
+            ""
+        }
+        val brand = MarketplaceLogic.buildSellerBrandSnapshot(
+            name = cleanName,
+            avatar = avatar,
+            businessLogo = cleanLogo,
+            accountType = resolvedType,
+            businessActivity = cleanActivity
+        )
+
         db.collection("users_public").document(uid).update(
             mapOf(
                 "name" to cleanName,
-                "avatar" to avatar,
+                "avatar" to brand.sellerAvatar,
                 "city" to cleanCity,
+                "accountType" to resolvedType.wireValue,
+                "businessActivity" to cleanActivity,
+                "businessLogo" to cleanLogo,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
         ).await()
@@ -339,6 +405,126 @@ class AuthRepository @Inject constructor(
                 "updatedAt" to FieldValue.serverTimestamp()
             )
         ).await()
+
+        // Propagate updated store/company identity onto existing non-sold products under the same UID
+        runCatching {
+            val sellerProducts = db.collection("products")
+                .whereEqualTo("sellerId", uid)
+                .get()
+                .await()
+                .documents
+                .filter { it.getString("status") != ProductStatus.SOLD.wireValue }
+
+            sellerProducts.chunked(400).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { doc ->
+                    batch.update(
+                        doc.reference,
+                        mapOf(
+                            "sellerName" to brand.sellerName,
+                            "sellerAvatar" to brand.sellerAvatar,
+                            "sellerAccountType" to brand.sellerAccountType,
+                            "sellerBusinessActivity" to brand.sellerBusinessActivity,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.commit().await()
+            }
+        }
+
+        syncCommercialProfileDoc(
+            uid = uid,
+            resolvedType = resolvedType,
+            cleanName = cleanName,
+            effectiveAvatar = brand.sellerAvatar,
+            cleanCity = cleanCity,
+            cleanActivity = cleanActivity,
+            cleanLogo = cleanLogo
+        )
+    }
+
+    suspend fun ensureCommercialProfileSynced(user: PublicUser) {
+        val authUid = clients.auth?.currentUser?.uid ?: return
+        if (authUid != user.uid || !user.resolvedAccountType().isCommercial()) return
+        val db = clients.firestore ?: return
+        runCatching {
+            val commercialRef = db.collection("commercial_profiles").document(user.uid)
+            val snap = commercialRef.get().await()
+            if (!snap.exists()) {
+                syncCommercialProfileDoc(
+                    uid = user.uid,
+                    resolvedType = user.resolvedAccountType(),
+                    cleanName = user.name.trim().take(80),
+                    effectiveAvatar = user.avatar.trim().take(1000),
+                    cleanCity = user.city.trim().take(100),
+                    cleanActivity = user.businessActivity.orEmpty().trim().take(120),
+                    cleanLogo = user.businessLogo.orEmpty().trim().take(1000)
+                )
+            }
+        }
+    }
+
+    private suspend fun syncCommercialProfileDoc(
+        uid: String,
+        resolvedType: AccountType,
+        cleanName: String,
+        effectiveAvatar: String,
+        cleanCity: String,
+        cleanActivity: String,
+        cleanLogo: String
+    ) {
+        val db = clients.firestore ?: return
+        val commercialRef = db.collection("commercial_profiles").document(uid)
+        if (!resolvedType.isCommercial()) {
+            runCatching { commercialRef.delete().await() }
+            return
+        }
+
+        val existingCommercial = commercialRef.get().await()
+        if (!existingCommercial.exists()) {
+            val publicSnap = db.collection("users_public").document(uid).get().await()
+            val joinedDate = publicSnap.getTimestamp("joinedDate") ?: FieldValue.serverTimestamp()
+            val rating = publicSnap.getDouble("rating") ?: 5.0
+            val dealsCompleted = (publicSnap.getLong("dealsCompleted") ?: 0L).toInt()
+            val reportsCount = (publicSnap.getLong("reportsCount") ?: 0L).toInt()
+            val verifiedIdentity = publicSnap.getBoolean("verifiedIdentity") ?: false
+            val status = publicSnap.getString("status") ?: UserStatus.ACTIVE.wireValue
+
+            val payload = hashMapOf<String, Any>(
+                "uid" to uid,
+                "name" to cleanName,
+                "avatar" to effectiveAvatar,
+                "city" to cleanCity,
+                "rating" to rating,
+                "dealsCompleted" to dealsCompleted,
+                "reportsCount" to reportsCount,
+                "verifiedIdentity" to verifiedIdentity,
+                "status" to status,
+                "accountType" to resolvedType.wireValue,
+                "joinedDate" to joinedDate,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (cleanActivity.isNotEmpty()) {
+                payload["businessActivity"] = cleanActivity
+            }
+            if (cleanLogo.isNotEmpty()) {
+                payload["businessLogo"] = cleanLogo
+            }
+            commercialRef.set(payload).await()
+        } else {
+            commercialRef.update(
+                mapOf(
+                    "name" to cleanName,
+                    "avatar" to effectiveAvatar,
+                    "city" to cleanCity,
+                    "accountType" to resolvedType.wireValue,
+                    "businessActivity" to cleanActivity,
+                    "businessLogo" to cleanLogo,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        }
     }
 
     suspend fun adjustRewardCredits(uid: String, delta: Int): Result<Int> = runCatching {
@@ -378,6 +564,37 @@ class AuthRepository @Inject constructor(
         val reg = query.addSnapshotListener { snap, _ ->
             val list = snap?.documents?.mapNotNull { doc ->
                 doc.toObject(PublicUser::class.java)?.copy(uid = doc.id)
+            }.orEmpty()
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    fun observeCommercialProfiles(isVerifiedAdminEmail: Boolean): Flow<List<PublicUser>> = callbackFlow {
+        val db = clients.firestore
+        if (db == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+
+        val query = if (isVerifiedAdminEmail) {
+            db.collection("commercial_profiles")
+        } else {
+            db.collection("commercial_profiles")
+                .whereEqualTo("status", UserStatus.ACTIVE.wireValue)
+                .whereIn("accountType", listOf(AccountType.STORE.wireValue, AccountType.COMPANY.wireValue))
+        }
+
+        val reg = query.addSnapshotListener { snap, err ->
+            if (err != null) {
+                Log.w("HatchCommercial", "commercial_profiles listener error: code=${err.code}")
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
+            val list = snap?.documents?.mapNotNull { doc ->
+                val raw = doc.toObject(PublicUser::class.java)?.copy(uid = doc.id) ?: return@mapNotNull null
+                if (isVerifiedAdminEmail) raw else MarketplaceLogic.sanitizeCommercialProfileForGuest(raw)
             }.orEmpty()
             trySend(list)
         }
