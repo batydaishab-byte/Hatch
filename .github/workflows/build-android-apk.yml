@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-apk-${{ github.ref }}
@@ -232,6 +232,11 @@ jobs:
           fi
 
           {
+            echo "HATCH_APK_SHA1=$SHA1_FORMATTED"
+            echo "HATCH_APK_SHA256=$SHA256_FORMATTED"
+          } >> "$GITHUB_ENV"
+
+          {
             echo "### APK Signing Certificate Fingerprints"
             echo "- **Package:** \`com.hatch.marketplace\`"
             echo "- **SHA-1:** \`$SHA1_FORMATTED\`"
@@ -285,6 +290,13 @@ jobs:
             exit 1
           fi
 
+          VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" | head -n 1)
+          VERSION_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -n 1)
+          {
+            echo "HATCH_VERSION_CODE=${VERSION_CODE:-1}"
+            echo "HATCH_VERSION_NAME=${VERSION_NAME:-1.0.0}"
+          } >> "$GITHUB_ENV"
+
           echo "Verified installable, signed, zipaligned HATCH APK at android-native/$APK_PATH" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload app-debug.apk Artifact
@@ -295,6 +307,84 @@ jobs:
           path: android-native/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish Latest Verified APK to preview-latest Release
+        if: success() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && env.HATCH_REQUIRE_PERSISTENT_SIGNING == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -s "$SOURCE_APK" ]; then
+            echo "ERROR: Verified APK not found at $SOURCE_APK"
+            exit 1
+          fi
+
+          RELEASE_TAG="preview-latest"
+          RELEASE_ASSET_NAME="hatch-app-debug.apk"
+          STAGED_APK="${RUNNER_TEMP}/${RELEASE_ASSET_NAME}"
+          cp -f "$SOURCE_APK" "$STAGED_APK"
+
+          VERSION_NAME="${HATCH_VERSION_NAME:-1.0.0}"
+          VERSION_CODE="${HATCH_VERSION_CODE:-1}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          BUILD_UTC="$(date -u '+%Y-%m-%d %H:%M UTC')"
+          RELEASE_TITLE="HATCH Android Preview v${VERSION_NAME} (Build ${VERSION_CODE})"
+
+          RELEASE_NOTES=$(cat <<EOF
+          أحدث نسخة موثقة وموقعة من تطبيق **HATCH Android Native**.
+
+          - **Version:** ${VERSION_NAME} (Build ${VERSION_CODE})
+          - **Package:** com.hatch.marketplace
+          - **Asset:** ${RELEASE_ASSET_NAME}
+          - **Commit:** ${SHORT_SHA}
+          - **Updated (UTC):** ${BUILD_UTC}
+          - **SHA-1:** \`${HATCH_APK_SHA1:-verified}\`
+          - **SHA-256:** \`${HATCH_APK_SHA256:-verified}\`
+          EOF
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Updating existing release ${RELEASE_TAG}..."
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+            git push -f origin "refs/tags/${RELEASE_TAG}"
+
+            EXISTING_APKS=$(gh release view "$RELEASE_TAG" --json assets -q '.assets[].name' | grep -E '\.apk$' || true)
+            for OLD_ASSET in $EXISTING_APKS; do
+              if [ "$OLD_ASSET" != "$RELEASE_ASSET_NAME" ]; then
+                gh release delete-asset "$RELEASE_TAG" "$OLD_ASSET" --yes || true
+              fi
+            done
+
+            gh release upload "$RELEASE_TAG" "$STAGED_APK" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --prerelease=false \
+              --latest
+          else
+            echo "Creating release ${RELEASE_TAG}..."
+            gh release create "$RELEASE_TAG" "$STAGED_APK" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --latest
+          fi
+
+          RELEASE_JSON=$(gh release view "$RELEASE_TAG" --json tagName,assets)
+          echo "$RELEASE_JSON" | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          assets = [a for a in data.get("assets", []) if a.get("name") == "hatch-app-debug.apk" and a.get("size", 0) > 0]
+          if not assets:
+              sys.exit("ERROR: hatch-app-debug.apk missing or empty in release.")
+          print(f"Verified release {data.get(\"tagName\")} asset: {assets[0][\"name\"]} ({assets[0][\"size\"]} bytes)")
+          '
+
+          rm -f "$STAGED_APK"
 
       - name: Clean Up Temporary Signing Keystore
         if: always()
