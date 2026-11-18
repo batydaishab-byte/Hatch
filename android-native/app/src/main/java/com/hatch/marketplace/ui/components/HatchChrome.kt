@@ -41,8 +41,6 @@ import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PersonOutline
 import androidx.compose.material.icons.rounded.Security
-import androidx.compose.material.icons.rounded.Storefront
-import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Button
@@ -302,7 +300,7 @@ fun HatchBottomNav(
         ) {
             NavItemButton(
                 label = strings.navSwipe,
-                icon = Icons.Rounded.Style,
+                icon = HatchNavIcons.Flame,
                 selected = activeTab == MainTab.SWIPE,
                 badgeCount = 0,
                 onClick = { onSelectTab(MainTab.SWIPE) },
@@ -310,7 +308,7 @@ fun HatchBottomNav(
             )
             NavItemButton(
                 label = strings.navBrowse,
-                icon = Icons.Rounded.Storefront,
+                icon = HatchNavIcons.MarketStore,
                 selected = activeTab == MainTab.BROWSE,
                 badgeCount = 0,
                 onClick = { onSelectTab(MainTab.BROWSE) },

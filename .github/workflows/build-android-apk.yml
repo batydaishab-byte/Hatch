@@ -375,14 +375,23 @@ jobs:
           fi
 
           RELEASE_JSON=$(gh release view "$RELEASE_TAG" --json tagName,assets)
-          echo "$RELEASE_JSON" | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)
-          assets = [a for a in data.get("assets", []) if a.get("name") == "hatch-app-debug.apk" and a.get("size", 0) > 0]
+          RELEASE_JSON="$RELEASE_JSON" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          data = json.loads(os.environ["RELEASE_JSON"])
+          assets = [
+              a for a in data.get("assets", [])
+              if a.get("name") == "hatch-app-debug.apk" and a.get("size", 0) > 0
+          ]
           if not assets:
               sys.exit("ERROR: hatch-app-debug.apk missing or empty in release.")
-          print(f"Verified release {data.get(\"tagName\")} asset: {assets[0][\"name\"]} ({assets[0][\"size\"]} bytes)")
-          '
+          tag_name = data.get("tagName", "preview-latest")
+          asset_name = assets[0]["name"]
+          asset_size = assets[0]["size"]
+          print(f"Verified release {tag_name} asset: {asset_name} ({asset_size} bytes)")
+          PY
 
           rm -f "$STAGED_APK"
 
