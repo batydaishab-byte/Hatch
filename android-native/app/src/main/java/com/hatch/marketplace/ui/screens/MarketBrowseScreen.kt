@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -44,8 +45,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -61,8 +60,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -81,6 +83,7 @@ import com.hatch.marketplace.data.model.ProductCondition
 import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.SudaneseCities
 import com.hatch.marketplace.ui.components.AdMobNativeCard
+import com.hatch.marketplace.ui.components.HatchCategoryIcons
 import com.hatch.marketplace.ui.components.ProductCard
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber400
@@ -126,6 +129,7 @@ fun MarketBrowseScreen(
 ) {
     var showFilterSheet by remember { mutableStateOf(false) }
     var searchFocused by remember { mutableStateOf(false) }
+    var searchInputFocused by remember { mutableStateOf(false) }
 
     val nativeAds = remember(sponsoredAds) {
         sponsoredAds.filter { it.isActive && (it.format == "native" || it.format == "all") }
@@ -166,37 +170,81 @@ fun MarketBrowseScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
+                val searchBorderColor = if (searchInputFocused) {
+                    HatchAmber500.copy(alpha = 0.8f)
+                } else {
+                    HatchBorderDark
+                }
+                BasicTextField(
                     value = filter.searchQuery,
                     onValueChange = { q ->
                         onUpdateFilter { it.copy(searchQuery = q) }
                         searchFocused = true
                     },
-                    placeholder = { Text(strings.searchPlaceholder, color = HatchTextMuted, fontSize = 12.sp) },
-                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = HatchAmber400) },
-                    trailingIcon = {
-                        if (filter.searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { onUpdateFilter { it.copy(searchQuery = "") } }) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Clear", tint = HatchTextMuted)
-                            }
-                        }
-                    },
                     singleLine = true,
+                    textStyle = TextStyle(
+                        color = HatchTextPrimary,
+                        fontSize = 14.sp
+                    ),
+                    cursorBrush = SolidColor(HatchAmber500),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
                         onCommitSearch(filter.searchQuery)
                         searchFocused = false
                     }),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = HatchSurfaceDark,
-                        unfocusedContainerColor = HatchSurfaceDark,
-                        focusedBorderColor = HatchAmber500,
-                        unfocusedBorderColor = HatchBorderDark,
-                        focusedTextColor = HatchTextPrimary,
-                        unfocusedTextColor = HatchTextPrimary
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(HatchSurfaceDark)
+                        .border(1.dp, searchBorderColor, RoundedCornerShape(16.dp))
+                        .onFocusChanged { focusState ->
+                            searchInputFocused = focusState.isFocused
+                            if (focusState.isFocused) {
+                                searchFocused = true
+                            }
+                        },
+                    decorationBox = { innerTextField ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = null,
+                                tint = HatchTextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (filter.searchQuery.isEmpty()) {
+                                    Text(
+                                        text = strings.searchPlaceholder,
+                                        color = Color(0xFF737373),
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                innerTextField()
+                            }
+                            if (filter.searchQuery.isNotEmpty()) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Clear",
+                                    tint = HatchTextMuted,
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clickable { onUpdateFilter { it.copy(searchQuery = "") } }
+                                )
+                            }
+                        }
+                    }
                 )
 
                 Box {
@@ -288,11 +336,19 @@ fun MarketBrowseScreen(
                     .padding(horizontal = 14.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                CategoryChip(strings.allCategories, filter.selectedCategory == "all") {
+                CategoryChip(
+                    label = strings.allCategories,
+                    selected = filter.selectedCategory == "all",
+                    icon = HatchCategoryIcons.All
+                ) {
                     onUpdateFilter { it.copy(selectedCategory = "all") }
                 }
                 CategoryId.entries.forEach { cat ->
-                    CategoryChip(strings.categoryLabel(cat.wireValue), filter.selectedCategory == cat.wireValue) {
+                    CategoryChip(
+                        label = strings.categoryLabel(cat.wireValue),
+                        selected = filter.selectedCategory == cat.wireValue,
+                        icon = HatchCategoryIcons.forCategory(cat)
+                    ) {
                         onUpdateFilter { it.copy(selectedCategory = cat.wireValue) }
                     }
                 }
@@ -469,7 +525,12 @@ fun MarketBrowseScreen(
 }
 
 @Composable
-private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun CategoryChip(
+    label: String,
+    selected: Boolean,
+    icon: ImageVector? = null,
+    onClick: () -> Unit
+) {
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
@@ -478,7 +539,32 @@ private fun CategoryChip(label: String, selected: Boolean, onClick: () -> Unit) 
             .clickable { onClick() }
             .padding(horizontal = 13.dp, vertical = 7.dp)
     ) {
-        Text(label, color = if (selected) HatchBgDark else HatchTextSecondary, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Black else FontWeight.Medium)
+        if (icon != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (selected) HatchBgDark else HatchAmber400,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    label,
+                    color = if (selected) HatchBgDark else HatchTextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = if (selected) FontWeight.Black else FontWeight.Medium
+                )
+            }
+        } else {
+            Text(
+                label,
+                color = if (selected) HatchBgDark else HatchTextSecondary,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.Black else FontWeight.Medium
+            )
+        }
     }
 }
 

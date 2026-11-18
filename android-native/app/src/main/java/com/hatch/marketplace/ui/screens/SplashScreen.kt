@@ -9,7 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,14 +31,11 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hatch.marketplace.R
-import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.ui.i18n.HatchStrings
-import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
 import com.hatch.marketplace.ui.theme.HatchBgDark
 import com.hatch.marketplace.ui.theme.HatchBorderDark
@@ -98,21 +94,6 @@ fun SplashScreen(strings: HatchStrings) {
                     contentDescription = "HATCH — هتش",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(text = strings.appName, color = HatchAmber400, fontSize = 32.sp, fontWeight = FontWeight.Black)
-                Text(
-                    text = if (strings.language == AppLanguage.AR) "هتش السودان" else "HATCH SUDAN",
-                    color = HatchAmber400,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(HatchAmber500.copy(alpha = 0.12f))
-                        .border(1.dp, HatchAmber500.copy(alpha = 0.35f), RoundedCornerShape(50))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
                 )
             }
 

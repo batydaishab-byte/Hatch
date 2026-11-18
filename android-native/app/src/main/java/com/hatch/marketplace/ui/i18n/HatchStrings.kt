@@ -175,7 +175,7 @@ data class HatchStrings(
     }
     fun categoryLabel(category: String): String = when (CategoryId.fromWire(category)) {
         CategoryId.PHONES -> if (language == AppLanguage.AR) "هواتف وأجهزة لوحية" else "Phones & Tablets"
-        CategoryId.ELECTRONICS -> if (language == AppLanguage.AR) "إلكترونيات ولابتوب" else "Electronics & Laptops"
+        CategoryId.ELECTRONICS -> if (language == AppLanguage.AR) "إلكترونيات ولابتوبات" else "Electronics & Laptops"
         CategoryId.VEHICLES -> if (language == AppLanguage.AR) "سيارات ومركبات" else "Vehicles & Cars"
         CategoryId.FURNITURE -> if (language == AppLanguage.AR) "أثاث ومفروشات" else "Furniture & Home"
         CategoryId.FASHION -> if (language == AppLanguage.AR) "أزياء وموضة" else "Fashion & Style"
