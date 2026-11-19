@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -102,13 +103,16 @@ import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.ChatMessage
 import com.hatch.marketplace.data.model.Conversation
 import com.hatch.marketplace.data.model.HatchFormatters
+import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.OfferStatus
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
+import com.hatch.marketplace.data.model.UserReview
 import com.hatch.marketplace.ui.components.AudioMessagePlayer
 import com.hatch.marketplace.ui.components.BadgePill
 import com.hatch.marketplace.ui.components.VoiceRecorderHelper
 import com.hatch.marketplace.ui.i18n.HatchStrings
+import com.hatch.marketplace.ui.state.ReviewRequest
 import com.hatch.marketplace.ui.modals.HatchField
 import com.hatch.marketplace.ui.modals.SelectablePill
 import com.hatch.marketplace.ui.modals.hatchInputColors
@@ -137,10 +141,14 @@ fun ChatScreen(
     activeConversationId: String?,
     messages: List<ChatMessage>,
     products: List<Product>,
+    reviews: List<UserReview> = emptyList(),
     currentUserId: String,
+    isCurrentlySuspended: Boolean = false,
     language: AppLanguage,
     strings: HatchStrings,
     onSelectConversation: (Conversation?) -> Unit,
+    onOpenProduct: (Product) -> Unit = {},
+    onOpenReview: (ReviewRequest) -> Unit = {},
     onSendMessage: (String) -> Unit,
     onSendInspectionPhoto: (Uri?, String?, String, String) -> Unit,
     onSendVoiceNote: (String, Int) -> Unit,
@@ -289,23 +297,40 @@ fun ChatScreen(
             IconButton(onClick = { onSelectConversation(null) }) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = HatchAmber400)
             }
-            if (activeConv.productImage.isNotBlank()) {
-                AsyncImage(
-                    model = activeConv.productImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(38.dp).clip(RoundedCornerShape(8.dp))
-                )
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(partnerName, color = HatchTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
-                Text(
-                    text = "${activeConv.productTitle} • ${HatchFormatters.formatSdg(activeConv.productPrice, language)}",
-                    color = HatchAmber400,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(
+                        if (linkedProduct != null) {
+                            Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onOpenProduct(linkedProduct) }
+                                .padding(vertical = 2.dp)
+                        } else {
+                            Modifier
+                        }
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (activeConv.productImage.isNotBlank()) {
+                    AsyncImage(
+                        model = activeConv.productImage,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(38.dp).clip(RoundedCornerShape(8.dp))
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(partnerName, color = HatchTextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+                    Text(
+                        text = "${activeConv.productTitle} • ${HatchFormatters.formatSdg(activeConv.productPrice, language)}",
+                        color = HatchAmber400,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
 
@@ -363,6 +388,52 @@ fun ChatScreen(
                         Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(strings.markSoldChatCta, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                    }
+                } else if (!isSeller && activeConv.offerStatus == OfferStatus.ACCEPTED.wireValue && linkedProduct?.status == ProductStatus.SOLD.wireValue) {
+                    val alreadyRated = MarketplaceLogic.hasBuyerAlreadyReviewedProduct(
+                        reviews = reviews,
+                        currentUserId = currentUserId,
+                        productId = activeConv.productId
+                    )
+                    if (alreadyRated) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(HatchEmerald500.copy(alpha = 0.14f))
+                                .border(1.dp, HatchEmerald500.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(strings.dealRatedLabel, color = HatchEmerald400, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    } else if (!isCurrentlySuspended && currentUserId.isNotBlank() && activeConv.buyerId == currentUserId && activeConv.sellerId != currentUserId) {
+                        Button(
+                            onClick = {
+                                onOpenReview(
+                                    ReviewRequest(
+                                        sellerId = activeConv.sellerId,
+                                        sellerName = activeConv.sellerName,
+                                        sellerAvatar = activeConv.sellerAvatar,
+                                        productId = activeConv.productId,
+                                        conversationId = activeConv.id,
+                                        productTitle = activeConv.productTitle.ifBlank {
+                                            if (language == AppLanguage.AR) linkedProduct.titleAr else linkedProduct.titleEn.ifBlank { linkedProduct.titleAr }
+                                        }
+                                    )
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.Star, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(strings.rateSeller, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                        }
                     }
                 } else if (!isSeller && activeConv.offerStatus == OfferStatus.COUNTERED.wireValue) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

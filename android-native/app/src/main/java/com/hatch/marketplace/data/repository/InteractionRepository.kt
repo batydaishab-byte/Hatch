@@ -1,11 +1,16 @@
 package com.hatch.marketplace.data.repository
 
 import com.google.firebase.firestore.FieldValue
+import com.hatch.marketplace.data.model.CreditTransaction
 import com.hatch.marketplace.data.model.HatchFormatters
+import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.NotificationItem
 import com.hatch.marketplace.data.model.ProductStatus
+import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.ReportTicket
 import com.hatch.marketplace.data.model.UserReview
+import com.hatch.marketplace.data.model.VerificationRequest
+import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -42,35 +47,46 @@ class InteractionRepository @Inject constructor(
             .collection("favorites").document(productId)
         val productRef = db.collection("products").document(productId)
 
-        if (currentlyFavorite) {
-            favRef.delete().await()
-        } else {
-            favRef.set(
-                mapOf(
-                    "productId" to productId,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
-        }
-
-        runCatching {
-            db.runTransaction { tx ->
-                val snap = tx.get(productRef)
-                if (snap.exists() && snap.getString("status") == ProductStatus.ACTIVE.wireValue) {
-                    val likes = (snap.getLong("likesCount") ?: 0L).toInt()
-                    val nextLikes = if (currentlyFavorite) maxOf(0, likes - 1) else likes + 1
-                    tx.update(
-                        productRef,
-                        mapOf(
-                            "likesCount" to nextLikes,
-                            "updatedAt" to FieldValue.serverTimestamp()
+        db.runTransaction { tx ->
+            val favSnap = tx.get(favRef)
+            val prodSnap = tx.get(productRef)
+            if (favSnap.exists()) {
+                tx.delete(favRef)
+                if (prodSnap.exists() && prodSnap.getString("status") == ProductStatus.ACTIVE.wireValue) {
+                    val likes = (prodSnap.getLong("likesCount") ?: 0L).toInt()
+                    if (likes > 0) {
+                        tx.update(
+                            productRef,
+                            mapOf(
+                                "likesCount" to (likes - 1),
+                                "updatedAt" to FieldValue.serverTimestamp()
+                            )
                         )
-                    )
+                    }
                 }
-            }.await()
-        }
-
-        !currentlyFavorite
+                false
+            } else {
+                require(prodSnap.exists() && prodSnap.getString("status") == ProductStatus.ACTIVE.wireValue) {
+                    "Only active listings can be added to favorites."
+                }
+                val likes = (prodSnap.getLong("likesCount") ?: 0L).toInt()
+                tx.set(
+                    favRef,
+                    mapOf(
+                        "productId" to productId,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                tx.update(
+                    productRef,
+                    mapOf(
+                        "likesCount" to (likes + 1),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+                true
+            }
+        }.await()
     }
 
     suspend fun recordSwipe(userId: String, productId: String, action: String) {
@@ -174,42 +190,48 @@ class InteractionRepository @Inject constructor(
         comment: String,
         tags: List<String>,
         productId: String?,
+        conversationId: String?,
         productTitle: String?
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
         val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
         require(authUid == reviewerId) { "Authenticated user mismatch." }
         require(sellerId != reviewerId) { "You cannot review your own account." }
+        require(!productId.isNullOrBlank() && !conversationId.isNullOrBlank()) {
+            "Reviews require an accepted and completed deal."
+        }
         require(rating in 1..5) { "Rating must be between 1 and 5." }
         val cleanComment = comment.trim().take(600)
         require(cleanComment.length >= 2) { "Review comment must be at least 2 characters." }
+        val cleanTags = tags.map { it.trim().take(50) }.filter { it.isNotEmpty() }.take(6)
 
-        val reviewId = HatchFormatters.sanitizeFirestoreId("rev_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        val reviewId = MarketplaceLogic.buildDeterministicReviewId(productId, reviewerId)
         val payload = hashMapOf<String, Any>(
             "id" to reviewId,
             "sellerId" to sellerId,
             "reviewerId" to reviewerId,
             "reviewerName" to reviewerName.take(80),
-            "reviewerAvatar" to reviewerAvatar,
+            "reviewerAvatar" to reviewerAvatar.take(1000),
             "rating" to rating,
             "comment" to cleanComment,
-            "tags" to tags.take(6),
+            "tags" to cleanTags,
+            "productId" to productId,
+            "conversationId" to conversationId,
             "createdAt" to FieldValue.serverTimestamp()
         )
-        if (!productId.isNullOrBlank()) payload["productId"] = productId
         if (!productTitle.isNullOrBlank()) payload["productTitle"] = productTitle.take(140)
 
         db.collection("reviews").document(reviewId).set(payload).await()
     }
 
-    fun observeReports(userId: String?, isVerifiedAdminEmail: Boolean): Flow<List<ReportTicket>> = callbackFlow {
+    fun observeReports(userId: String?, hasAdminClaim: Boolean): Flow<List<ReportTicket>> = callbackFlow {
         val db = clients.firestore
         if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
         }
-        val query = if (isVerifiedAdminEmail) {
+        val query = if (hasAdminClaim) {
             db.collection("reports")
         } else {
             db.collection("reports").whereEqualTo("reporterId", userId)
@@ -231,8 +253,7 @@ class InteractionRepository @Inject constructor(
         reportedProductId: String?,
         reportedProductTitle: String?,
         reason: String,
-        message: String,
-        flagListing: Boolean
+        message: String
     ): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
         val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
@@ -257,17 +278,80 @@ class InteractionRepository @Inject constructor(
         if (!reportedProductTitle.isNullOrBlank()) payload["reportedProductTitle"] = reportedProductTitle.take(140)
 
         db.collection("reports").document(reportId).set(payload).await()
+    }
 
-        if (flagListing && !reportedProductId.isNullOrBlank()) {
-            runCatching {
-                db.collection("products").document(reportedProductId)
-                    .update(
-                        mapOf(
-                            "status" to ProductStatus.FLAGGED.wireValue,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
-            }
+    fun observeVerificationRequests(userId: String?, hasAdminClaim: Boolean): Flow<List<VerificationRequest>> = callbackFlow {
+        val db = clients.firestore
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
         }
+        val query = if (hasAdminClaim) {
+            db.collection("verification_requests")
+        } else {
+            db.collection("verification_requests").whereEqualTo("uid", userId)
+        }
+        val reg = query.addSnapshotListener { snap, _ ->
+            val list = snap?.documents?.mapNotNull { doc ->
+                doc.toObject(VerificationRequest::class.java)?.copy(id = doc.id)
+            }.orEmpty().sortedByDescending { it.createdAt?.seconds ?: 0L }
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    suspend fun submitVerificationRequest(
+        user: PublicUser,
+        note: String,
+        documentUrl: String? = null
+    ): Result<String> = runCatching {
+        val db = clients.firestore ?: error("Firestore unavailable")
+        val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(authUid == user.uid) { "Authenticated user mismatch." }
+        require(!user.verifiedIdentity) { "Account already holds the Gold Verification Badge." }
+        val cleanNote = note.trim().take(600)
+        require(cleanNote.length >= 5) { "Verification note must be at least 5 characters." }
+
+        val reqId = HatchFormatters.sanitizeFirestoreId("vreq_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        val payload = hashMapOf<String, Any>(
+            "id" to reqId,
+            "uid" to user.uid,
+            "userName" to user.name.trim().take(80),
+            "userAvatar" to user.displayLogoOrAvatar().take(1000),
+            "accountType" to user.accountType,
+            "city" to user.city.trim().take(100),
+            "note" to cleanNote,
+            "status" to "pending",
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        val cleanDocUrl = documentUrl?.trim().orEmpty().take(1000)
+        if (cleanDocUrl.startsWith("https://")) {
+            payload["documentUrl"] = cleanDocUrl
+        }
+        db.collection("verification_requests").document(reqId).set(payload).await()
+        reqId
+    }
+
+    fun observeCreditTransactions(userId: String?, hasAdminClaim: Boolean): Flow<List<CreditTransaction>> = callbackFlow {
+        val db = clients.firestore
+        if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+        val query = if (hasAdminClaim) {
+            db.collection("credit_transactions")
+        } else {
+            db.collection("credit_transactions").whereEqualTo("uid", userId)
+        }
+        val reg = query.addSnapshotListener { snap, _ ->
+            val list = snap?.documents?.mapNotNull { doc ->
+                doc.toObject(CreditTransaction::class.java)?.copy(id = doc.id)
+            }.orEmpty().sortedByDescending { it.createdAt?.seconds ?: 0L }
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
     }
 }

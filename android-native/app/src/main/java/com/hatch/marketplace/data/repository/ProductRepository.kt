@@ -29,7 +29,7 @@ class ProductRepository @Inject constructor(
     private val clients: FirebaseClientsHolder,
     private val cloudinaryService: CloudinaryMediaService
 ) {
-    fun observeProducts(currentUserId: String?, isVerifiedAdminEmail: Boolean): Flow<List<Product>> = callbackFlow {
+    fun observeProducts(currentUserId: String?, hasAdminClaim: Boolean): Flow<List<Product>> = callbackFlow {
         val db = clients.firestore
         if (db == null) {
             trySend(emptyList())
@@ -43,7 +43,7 @@ class ProductRepository @Inject constructor(
             trySend(sorted)
         }
 
-        if (isVerifiedAdminEmail) {
+        if (hasAdminClaim) {
             val reg = db.collection("products").addSnapshotListener { snap, _ ->
                 mergedMap.clear()
                 snap?.documents?.forEach { doc ->
@@ -161,18 +161,18 @@ class ProductRepository @Inject constructor(
         val docId = HatchFormatters.sanitizeFirestoreId("prod_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val payload = hashMapOf<String, Any>(
             "id" to docId,
-            "titleAr" to titleAr.trim(),
-            "titleEn" to titleEn.trim().ifBlank { titleAr.trim() },
-            "descriptionAr" to descriptionAr.trim(),
-            "descriptionEn" to descriptionEn.trim().ifBlank { descriptionAr.trim() },
+            "titleAr" to titleAr.trim().take(120),
+            "titleEn" to titleEn.trim().ifBlank { titleAr.trim() }.take(120),
+            "descriptionAr" to descriptionAr.trim().take(2000),
+            "descriptionEn" to descriptionEn.trim().ifBlank { descriptionAr.trim() }.take(2000),
             "price" to price,
             "category" to category,
             "condition" to condition,
-            "city" to city,
-            "areaAr" to areaAr.trim(),
-            "areaEn" to areaEn.trim().ifBlank { areaAr.trim() },
+            "city" to city.trim().take(100),
+            "areaAr" to areaAr.trim().take(100),
+            "areaEn" to areaEn.trim().ifBlank { areaAr.trim() }.take(100),
             "images" to resolvedUrls.take(5),
-            "thumbnailUrl" to thumbnailUrl,
+            "thumbnailUrl" to thumbnailUrl.take(1000),
             "sellerId" to seller.uid,
             "sellerName" to brand.sellerName,
             "sellerAvatar" to brand.sellerAvatar,
@@ -225,22 +225,25 @@ class ProductRepository @Inject constructor(
         require(titleAr.trim().length in 2..120) { "Title must be 2 to 120 characters." }
         require(descriptionAr.trim().length in 5..2000) { "Description must be 5 to 2000 characters." }
         require(price > 0.0) { "Price must be positive." }
-        require(images.isNotEmpty()) { "At least one image URL is required." }
+        val cleanImages = images.map { it.trim() }
+            .filter { it.startsWith("https://") || it.startsWith("http://") }
+            .take(5)
+        require(cleanImages.isNotEmpty()) { "At least one valid HTTPS image URL is required." }
 
         val updates = hashMapOf<String, Any>(
-            "titleAr" to titleAr.trim(),
-            "titleEn" to titleEn.trim().ifBlank { titleAr.trim() },
-            "descriptionAr" to descriptionAr.trim(),
-            "descriptionEn" to descriptionEn.trim().ifBlank { descriptionAr.trim() },
+            "titleAr" to titleAr.trim().take(120),
+            "titleEn" to titleEn.trim().ifBlank { titleAr.trim() }.take(120),
+            "descriptionAr" to descriptionAr.trim().take(2000),
+            "descriptionEn" to descriptionEn.trim().ifBlank { descriptionAr.trim() }.take(2000),
             "price" to price,
             "originalPrice" to (originalPrice ?: 0.0),
             "category" to category,
             "condition" to condition,
-            "city" to city,
-            "areaAr" to areaAr.trim(),
-            "areaEn" to areaAr.trim(),
-            "images" to images.take(5),
-            "thumbnailUrl" to images.first(),
+            "city" to city.trim().take(100),
+            "areaAr" to areaAr.trim().take(100),
+            "areaEn" to areaAr.trim().take(100),
+            "images" to cleanImages,
+            "thumbnailUrl" to cleanImages.first().take(1000),
             "paymentMethods" to paymentMethods.distinct(),
             "negotiable" to negotiable,
             "deliveryAvailable" to deliveryAvailable,
@@ -250,7 +253,7 @@ class ProductRepository @Inject constructor(
         db.collection("products").document(productId).update(updates).await()
     }
 
-    suspend fun markProductAsSold(productId: String, sellerId: String): Result<Boolean> = runCatching {
+    suspend fun markProductAsSold(productId: String, sellerId: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
         val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
         require(authUid == sellerId) { "Seller UID mismatch." }
@@ -258,31 +261,36 @@ class ProductRepository @Inject constructor(
         val userRef = db.collection("users_public").document(sellerId)
         val commercialRef = db.collection("commercial_profiles").document(sellerId)
 
-        productRef.update(
-            mapOf(
-                "status" to ProductStatus.SOLD.wireValue,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
-
         db.runTransaction { tx ->
+            val productSnap = tx.get(productRef)
             val userSnap = tx.get(userRef)
             val commercialSnap = tx.get(commercialRef)
+
+            require(productSnap.exists()) { "Product not found." }
+            require(productSnap.getString("sellerId") == sellerId) { "Only the seller can mark this product sold." }
+            require(productSnap.getString("status") == ProductStatus.ACTIVE.wireValue) { "Only active listings can be marked sold." }
+
             val currentDeals = (userSnap.getLong("dealsCompleted") ?: 0L).toInt()
-            val reportsCount = (userSnap.getLong("reportsCount") ?: 0L).toInt()
-            val wasVerified = userSnap.getBoolean("verifiedIdentity") ?: false
             val nextDeals = currentDeals + 1
-            val shouldVerify = MarketplaceLogic.shouldAutoVerify(nextDeals, reportsCount)
-            val updatePayload = mapOf(
+
+            tx.update(
+                productRef,
+                mapOf(
+                    "status" to ProductStatus.SOLD.wireValue,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+
+            val dealUpdatePayload = mapOf(
                 "dealsCompleted" to nextDeals,
-                "verifiedIdentity" to shouldVerify,
+                "lastSoldProductId" to productId,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
-            tx.update(userRef, updatePayload)
+            tx.update(userRef, dealUpdatePayload)
             if (commercialSnap.exists()) {
-                tx.update(commercialRef, updatePayload)
+                tx.update(commercialRef, dealUpdatePayload)
             }
-            !wasVerified && shouldVerify
+            Unit
         }.await()
     }
 
@@ -292,15 +300,26 @@ class ProductRepository @Inject constructor(
         require(authUid == ownerUid) { "Owner UID mismatch." }
         val privateRef = db.collection("users_private").document(ownerUid)
         val productRef = db.collection("products").document(productId)
+        val txId = HatchFormatters.sanitizeFirestoreId("ctx_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        val txRef = db.collection("credit_transactions").document(txId)
 
         db.runTransaction { tx ->
             val privateSnap = tx.get(privateRef)
+            val productSnap = tx.get(productRef)
+            require(privateSnap.exists()) { "Private profile not found." }
+            require(productSnap.exists()) { "Listing not found." }
+            require(productSnap.getString("sellerId") == ownerUid) { "Only the owner can boost this listing." }
+            require(productSnap.getString("status") == ProductStatus.ACTIVE.wireValue) { "Only active listings can be boosted." }
+            require(productSnap.getBoolean("featured") != true) { "Listing is already featured." }
+
             val credits = (privateSnap.getLong("rewardCredits") ?: 0L).toInt()
-            require(credits >= 1) { "You need at least 1 reward credit to feature this listing." }
+            require(credits >= 1) { "You need at least 1 boost credit to feature this listing." }
+
             tx.update(
                 privateRef,
                 mapOf(
                     "rewardCredits" to (credits - 1),
+                    "lastCreditTxId" to txId,
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -308,7 +327,22 @@ class ProductRepository @Inject constructor(
                 productRef,
                 mapOf(
                     "featured" to true,
+                    "featuredTxId" to txId,
                     "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            tx.set(
+                txRef,
+                hashMapOf<String, Any>(
+                    "id" to txId,
+                    "uid" to ownerUid,
+                    "type" to "ad_boost_spend",
+                    "amount" to -1,
+                    "balanceBefore" to credits,
+                    "balanceAfter" to (credits - 1),
+                    "productId" to productId,
+                    "reason" to "Featured listing boost",
+                    "createdAt" to FieldValue.serverTimestamp()
                 )
             )
         }.await()
@@ -322,15 +356,30 @@ class ProductRepository @Inject constructor(
 
     suspend fun incrementViews(productId: String) {
         val db = clients.firestore ?: return
-        clients.auth?.currentUser ?: return
+        val authUid = clients.auth?.currentUser?.uid ?: return
         runCatching {
-            val ref = db.collection("products").document(productId)
+            val productRef = db.collection("products").document(productId)
+            val viewRef = db.collection("users_private").document(authUid)
+                .collection("viewed_products").document(productId)
             db.runTransaction { tx ->
-                val snap = tx.get(ref)
-                if (snap.exists() && snap.getString("status") == ProductStatus.ACTIVE.wireValue) {
-                    val views = (snap.getLong("viewsCount") ?: 0L).toInt()
+                val viewSnap = tx.get(viewRef)
+                if (viewSnap.exists()) return@runTransaction Unit
+                val prodSnap = tx.get(productRef)
+                if (
+                    prodSnap.exists() &&
+                    prodSnap.getString("status") == ProductStatus.ACTIVE.wireValue &&
+                    prodSnap.getString("sellerId") != authUid
+                ) {
+                    val views = (prodSnap.getLong("viewsCount") ?: 0L).toInt()
+                    tx.set(
+                        viewRef,
+                        mapOf(
+                            "productId" to productId,
+                            "createdAt" to FieldValue.serverTimestamp()
+                        )
+                    )
                     tx.update(
-                        ref,
+                        productRef,
                         mapOf(
                             "viewsCount" to (views + 1),
                             "updatedAt" to FieldValue.serverTimestamp()

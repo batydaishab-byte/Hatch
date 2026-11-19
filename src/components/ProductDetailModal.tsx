@@ -39,7 +39,6 @@ export const ProductDetailModal: React.FC = () => {
     startOrOpenConversation, 
     favorites, 
     toggleFavorite, 
-    flagProduct, 
     openReportModal,
     openReviewModal,
     openBusinessProfile,

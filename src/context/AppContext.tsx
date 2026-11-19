@@ -11,7 +11,11 @@ import {
   SudaneseCity, 
   CategoryId, 
   Condition,
-  isUserVerified,
+  isUserSuspendedActive,
+  isAdminUser,
+  canTransitionOffer,
+  VerificationRequest,
+  CreditTransaction,
   ReportTicket,
   UserReview,
   AdMobConfig,
@@ -42,6 +46,23 @@ import {
   updateUserProfileInFirestore,
   publishProductToFirestore,
   subscribeToFirestoreCatalog,
+  subscribeToPrivateCredits,
+  subscribeToVerificationRequests,
+  subscribeToCreditTransactions,
+  subscribeToReports,
+  markProductAsSoldInFirestore,
+  featureProductWithCreditInFirestore,
+  grantRewardCreditInFirestore,
+  submitVerificationRequestToFirestore,
+  reviewVerificationRequestInFirestore,
+  setUserVerifiedInFirestore,
+  submitReportToFirestore,
+  adminApproveProductInFirestore,
+  adminFlagProductInFirestore,
+  adminDeleteProductInFirestore,
+  adminSuspendUserInFirestore,
+  adminUnsuspendUserInFirestore,
+  adminResolveReportInFirestore,
 } from '../lib/firebase';
 import {
   applyUserProfileUpdate,
@@ -67,6 +88,8 @@ interface AppContextType {
   
   // User & Auth Persona
   currentUser: User;
+  isAdmin: boolean;
+  isCurrentUserSuspended: boolean;
   switchUser: (userId: string) => void;
   availableUsers: User[];
   createNewAccount: (userData: CreateAccountInput) => Promise<void> | void;
@@ -165,7 +188,7 @@ interface AppContextType {
   unreadMessagesCount: number;
 
   // Admin & Moderation & Reports
-  flagProduct: (productId: string, reason: string) => void;
+  adminFlagProduct: (productId: string, reason: string) => void;
   adminApproveProduct: (productId: string) => void;
   adminDeleteProduct: (productId: string) => void;
   adminDeleteUser: (userId: string) => void;
@@ -195,6 +218,15 @@ interface AppContextType {
   }) => void;
   closeReportModal: () => void;
   adminResolveReport: (reportId: string, action: 'resolved' | 'dismissed') => void;
+
+  // Gold Verification Requests & Credit Ledger (Spark Free Tier)
+  verificationRequests: VerificationRequest[];
+  creditTransactions: CreditTransaction[];
+  submitVerificationRequest: (note: string, documentUrl?: string) => Promise<boolean>;
+  adminApproveVerification: (requestId: string) => Promise<void>;
+  adminRejectVerification: (requestId: string, reason: string) => Promise<void>;
+  adminSetUserVerified: (userId: string, verified: boolean) => Promise<void>;
+  adminGrantCredit: (userId: string, amount: number, reason: string) => Promise<boolean>;
 
   // Seller Rating & Reviews
   reviews: UserReview[];
@@ -251,7 +283,7 @@ interface AppContextType {
   showRewardedAd: (onReward?: () => void) => void;
   closeRewardedAd: () => void;
   rewardCredits: number;
-  useRewardCreditForListing: (productId: string) => boolean;
+  useRewardCreditForListing: (productId: string) => Promise<boolean>;
 
   // Toast
   toasts: ToastState[];
@@ -313,6 +345,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
   const [authOnboardingRequired, setAuthOnboardingRequired] = useState<boolean>(false);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
+
+  const isCurrentUserSuspended = isUserSuspendedActive(currentUser);
+  const isAdmin = isAdminUser(currentUser, Boolean(firebaseUser));
+
+  const guardNotSuspended = (actionAr: string, actionEn: string): boolean => {
+    if (!isCurrentUserSuspended) return true;
+    const untilDate = currentUser.suspendedUntil
+      ? new Date(currentUser.suspendedUntil).toLocaleDateString(
+          language === 'ar' ? 'ar-SD' : 'en-US',
+          { year: 'numeric', month: 'long', day: 'numeric' }
+        )
+      : '';
+    showToast(
+      language === 'ar'
+        ? `⚠️ حسابك موقوف مؤقتاً${untilDate ? ` حتى ${untilDate}` : ''}. السبب: ${currentUser.suspensionReason || 'مخالفة الشروط'}. لا يمكنك ${actionAr}.`
+        : `⚠️ Your account is suspended${untilDate ? ` until ${untilDate}` : ''}. Reason: ${currentUser.suspensionReason || 'Violation'}. Cannot ${actionEn}.`,
+      'warning'
+    );
+    return false;
+  };
   
   // Persisted or default products
   const [products, setProducts] = useState<Product[]>(() => {
@@ -354,6 +406,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return saved ? JSON.parse(saved) : initialNotifications;
   });
 
+  // Verification Requests & Credit Ledger (Spark Free Tier)
+  const [verificationRequests, setVerificationRequests] = useState<VerificationRequest[]>(() => {
+    const saved = localStorage.getItem('hatch_verification_requests');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        /* ignore */
+      }
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (!firebaseUser) {
+      localStorage.setItem('hatch_verification_requests', JSON.stringify(verificationRequests));
+    }
+  }, [verificationRequests, firebaseUser]);
+
+  const [creditTransactions, setCreditTransactions] = useState<CreditTransaction[]>(() => {
+    const saved = localStorage.getItem('hatch_credit_transactions');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        /* ignore */
+      }
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (!firebaseUser) {
+      localStorage.setItem('hatch_credit_transactions', JSON.stringify(creditTransactions));
+    }
+  }, [creditTransactions, firebaseUser]);
+
   // Search & Filters
   const [selectedCity, setSelectedCity] = useState<SudaneseCity | 'all'>('all');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId | 'all'>('all');
@@ -371,16 +460,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [rawIsSellModalOpen, setRawIsSellModalOpen] = useState(false);
   const isSellModalOpen = rawIsSellModalOpen;
   const setIsSellModalOpen = (open: boolean) => {
-    if (open && currentUser.status === 'suspended') {
-      const untilDate = currentUser.suspendedUntil 
-        ? new Date(currentUser.suspendedUntil).toLocaleDateString(language === 'ar' ? 'ar-SD' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-        : '';
-      showToast(
-        language === 'ar'
-          ? `⚠️ حسابك موقوف مؤقتاً حتى ${untilDate}. سبب الإيقاف: ${currentUser.suspensionReason || 'مخالفة الشروط'}. لا يمكنك نشر إعلانات جديدة.`
-          : `⚠️ Your account is suspended until ${untilDate}. Reason: ${currentUser.suspensionReason || 'Violation'}. Cannot post new listings.`,
-        'warning'
-      );
+    if (open && !guardNotSuspended('نشر إعلانات جديدة', 'post new listings')) {
       return;
     }
     setRawIsSellModalOpen(open);
@@ -456,6 +536,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     productId?: string;
     productTitle?: string;
   }) => {
+    if (!guardNotSuspended('إرسال تقييم', 'submit reviews')) return;
+    if (reviewData.sellerId === currentUser.id) return;
     const newReview: UserReview = {
       id: `rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       sellerId: reviewData.sellerId,
@@ -586,7 +668,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [rewardCredits, setRewardCredits] = useState<number>(() => {
     const saved = localStorage.getItem('hatch_reward_credits');
-    return saved ? parseInt(saved, 10) || 0 : 2;
+    return saved ? parseInt(saved, 10) || 0 : 0;
   });
 
   const [isInterstitialOpen, setIsInterstitialOpen] = useState(false);
@@ -607,15 +689,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [sponsoredAds]);
 
   useEffect(() => {
-    localStorage.setItem('hatch_reward_credits', rewardCredits.toString());
-  }, [rewardCredits]);
+    if (!firebaseUser) {
+      localStorage.setItem('hatch_reward_credits', rewardCredits.toString());
+    }
+  }, [rewardCredits, firebaseUser]);
+
+  const guardAdmin = (): boolean => {
+    if (isAdmin) return true;
+    showToast(
+      language === 'ar'
+        ? '⛔ غير مصرح: هذه العملية متاحة لإدارة هتش المعتمدة فقط.'
+        : '⛔ Unauthorized: Admin privileges are required.',
+      'warning'
+    );
+    return false;
+  };
 
   const updateAdMobConfig = (newConfig: Partial<AdMobConfig>) => {
+    if (!guardAdmin()) return;
     setAdMobConfig((prev) => ({ ...prev, ...newConfig }));
     showToast(language === 'ar' ? 'تم حفظ وتحديث إعدادات شبكة AdMob بنجاح' : 'AdMob settings updated successfully', 'success');
   };
 
   const addSponsoredAd = (newAdData: Omit<SponsoredAdItem, 'id' | 'createdAt' | 'clicksCount' | 'impressionsCount'>) => {
+    if (!guardAdmin()) return;
     const newAd: SponsoredAdItem = {
       ...newAdData,
       id: `ad_${Date.now()}`,
@@ -634,6 +731,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateSponsoredAd = (id: string, updates: Partial<SponsoredAdItem>) => {
+    if (!guardAdmin()) return;
     setSponsoredAds((prev) =>
       prev.map((ad) => (ad.id === id ? { ...ad, ...updates } : ad))
     );
@@ -644,6 +742,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const toggleSponsoredAdStatus = (id: string) => {
+    if (!guardAdmin()) return;
     setSponsoredAds((prev) =>
       prev.map((ad) => {
         if (ad.id === id) {
@@ -662,6 +761,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteSponsoredAd = (id: string) => {
+    if (!guardAdmin()) return;
     setSponsoredAds((prev) => prev.filter((ad) => ad.id !== id));
     showToast(
       language === 'ar' ? 'تم حذف الإعلان نهائياً من الشبكة' : 'Ad campaign removed',
@@ -670,6 +770,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const resetAdStats = () => {
+    if (!guardAdmin()) return;
     setAdStats({
       impressions: 0,
       clicks: 0,
@@ -758,17 +859,60 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setOnRewardCallback(null);
   };
 
-  const useRewardCreditForListing = (productId: string): boolean => {
-    if (rewardCredits <= 0) return false;
-    setRewardCredits((prev) => Math.max(0, prev - 1));
-    // Boost listing: make it urgent and featured
+  const useRewardCreditForListing = async (productId: string): Promise<boolean> => {
+    if (!guardNotSuspended('تمييز إعلان', 'feature listings')) return false;
+    if (rewardCredits <= 0) {
+      showToast(
+        language === 'ar'
+          ? 'لا يوجد لديك رصيد تمييز كافٍ. تُمنح الأرصدة عبر إدارة هتش.'
+          : 'Insufficient boost credits. Credits are granted by HATCH Administration.',
+        'warning'
+      );
+      return false;
+    }
+    const target = products.find((p) => p.id === productId);
+    if (!target || target.sellerId !== currentUser.id || target.status !== 'active' || target.featured) {
+      return false;
+    }
+
+    if (firebaseUser && currentUser.id === firebaseUser.uid) {
+      try {
+        await featureProductWithCreditInFirestore(productId, firebaseUser.uid);
+      } catch (err) {
+        console.error('Error featuring listing via credit ledger:', err);
+        showToast(
+          language === 'ar'
+            ? 'تعذر تمييز الإعلان عبر السجل المحاسبي، يرجى التحقق من الرصيد.'
+            : 'Could not feature listing via Firestore ledger.',
+          'warning'
+        );
+        return false;
+      }
+    } else {
+      const before = rewardCredits;
+      const after = Math.max(0, before - 1);
+      setRewardCredits(after);
+      const localTx: CreditTransaction = {
+        id: `tx_${Date.now()}`,
+        uid: currentUser.id,
+        type: 'ad_boost_spend',
+        amount: -1,
+        balanceBefore: before,
+        balanceAfter: after,
+        productId,
+        reason: language === 'ar' ? 'تمييز إعلان عبر رصيد التمييز' : 'Featured listing boost',
+        createdAt: language === 'ar' ? 'الآن' : 'Just now',
+      };
+      setCreditTransactions((prev) => [localTx, ...prev]);
+    }
+
     setProducts((prev) =>
-      prev.map((p) => (p.id === productId ? { ...p, featured: true, urgentSale: true } : p))
+      prev.map((p) => (p.id === productId ? { ...p, featured: true } : p))
     );
     showToast(
       language === 'ar'
-        ? 'تم استخدام رصيد المكافأة وتمييز إعلانك كعاجل ومميز بنجاح! 🚀'
-        : 'Reward credit used! Your ad is now featured and urgent! 🚀',
+        ? 'تم خصم 1 رصيد وتمييز إعلانك بنجاح! 🚀'
+        : '1 Boost credit spent! Your ad is now featured! 🚀',
       'success'
     );
     return true;
@@ -841,6 +985,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const existingNormalized = normalizeLegacyUser(loaded.user);
           setAuthOnboardingRequired(false);
           setCurrentUser(existingNormalized);
+          setRewardCredits(loaded.rewardCredits);
           localStorage.setItem('hatch_current_user', JSON.stringify(existingNormalized));
           setAvailableUsers((prev) => {
             const exists = prev.some((u) => u.id === existingNormalized.id);
@@ -852,6 +997,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setIsCreateAccountOpen(false);
         } else {
           // New user or incomplete profile -> keep active UID, trigger account-type onboarding
+          setRewardCredits(loaded?.rewardCredits ?? 0);
           setAuthOnboardingRequired(true);
           setIsCreateAccountOpen(true);
         }
@@ -867,8 +1013,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Subscribe to Firestore catalog updates cleanly and merge with local/mock items
   useEffect(() => {
+    const hasAdminClaim = Boolean(firebaseUser && currentUser.hasAdminClaim);
     const unsubCatalog = subscribeToFirestoreCatalog(
       Boolean(firebaseUser),
+      hasAdminClaim,
       (fsUsers) => {
         if (fsUsers.length === 0) return;
         setAvailableUsers((prev) => {
@@ -901,10 +1049,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     );
 
+    if (!firebaseUser) {
+      return () => {
+        unsubCatalog();
+      };
+    }
+
+    const unsubCredits = subscribeToPrivateCredits(firebaseUser.uid, (credits) => {
+      setRewardCredits(credits);
+    });
+    const unsubVReqs = subscribeToVerificationRequests(
+      firebaseUser.uid,
+      hasAdminClaim,
+      (reqs) => setVerificationRequests(reqs)
+    );
+    const unsubTxs = subscribeToCreditTransactions(
+      firebaseUser.uid,
+      hasAdminClaim,
+      (txs) => setCreditTransactions(txs)
+    );
+    const unsubReports = subscribeToReports(
+      firebaseUser.uid,
+      hasAdminClaim,
+      (reps) => setReports(reps)
+    );
+
     return () => {
       unsubCatalog();
+      unsubCredits();
+      unsubVReqs();
+      unsubTxs();
+      unsubReports();
     };
-  }, [firebaseUser?.uid]);
+  }, [firebaseUser?.uid, currentUser.hasAdminClaim]);
 
   const signInWithGoogle = async () => {
     setIsAuthLoading(true);
@@ -916,6 +1093,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const normalized = normalizeLegacyUser(loaded.user);
         setAuthOnboardingRequired(false);
         setCurrentUser(normalized);
+        setRewardCredits(loaded.rewardCredits);
         localStorage.setItem('hatch_current_user', JSON.stringify(normalized));
         setAvailableUsers((prev) => {
           const exists = prev.some((u) => u.id === normalized.id);
@@ -932,6 +1110,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           'success'
         );
       } else {
+        setRewardCredits(loaded?.rewardCredits ?? 0);
         setAuthOnboardingRequired(true);
         setIsCreateAccountOpen(true);
         showToast(
@@ -962,6 +1141,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await signOutFirebase();
       setFirebaseUser(null);
       setAuthOnboardingRequired(false);
+      setRewardCredits(0);
+      setVerificationRequests([]);
+      setCreditTransactions([]);
       const fallback = normalizeLegacyUser(mockUsers[0]);
       setCurrentUser(fallback);
       localStorage.setItem('hatch_current_user', JSON.stringify(fallback));
@@ -979,6 +1161,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const switchUser = (userId: string) => {
+    if (firebaseUser) {
+      showToast(
+        language === 'ar'
+          ? '⚠️ لا يمكن تبديل الحسابات التجريبية أثناء تسجيل الدخول بحساب Google حقيقي.'
+          : '⚠️ Demo persona switching is disabled while signed in with Google.',
+        'warning'
+      );
+      return;
+    }
     const user = availableUsers.find((u) => u.id === userId);
     if (user) {
       setCurrentUser(user);
@@ -1063,6 +1254,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateCurrentUser = async (userData: Partial<User>) => {
+    if (!guardNotSuspended('تعديل الملف الشخصي', 'update your profile')) return;
     const updated = applyUserProfileUpdate(currentUser, userData);
 
     if (firebaseUser && currentUser.id === firebaseUser.uid) {
@@ -1123,6 +1315,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const toggleFavorite = (productId: string) => {
+    if (!guardNotSuspended('حفظ الإعلانات في المفضلة', 'save favorites')) return;
     setFavorites((prev) => {
       const exists = prev.includes(productId);
       if (exists) {
@@ -1212,10 +1405,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addProduct = (
     productData: Omit<Product, 'id' | 'createdAt' | 'viewsCount' | 'likesCount' | 'status'>
   ) => {
+    if (!guardNotSuspended('نشر إعلان جديد', 'post new ads')) return;
     const newId = 'prod_' + Date.now();
     const enrichedData = enrichProductWithSellerIdentity(productData, currentUser);
     const newProduct: Product = {
       ...enrichedData,
+      featured: false,
       id: newId,
       viewsCount: 1,
       likesCount: 0,
@@ -1244,8 +1439,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateProduct = (productId: string, updatedData: Partial<Product>) => {
+    if (!guardNotSuspended('تعديل الإعلان', 'edit listings')) return;
+    const target = products.find((p) => p.id === productId);
+    if (!target || (target.sellerId !== currentUser.id && !isAdmin)) return;
     setProducts((prev) =>
-      prev.map((p) => (p.id === productId ? { ...p, ...updatedData } : p))
+      prev.map((p) =>
+        p.id === productId
+          ? {
+              ...p,
+              ...updatedData,
+              featured: p.featured,
+              sellerVerified: p.sellerVerified,
+            }
+          : p
+      )
     );
     showToast(
       language === 'ar' ? 'تم تحديث بيانات الإعلان بنجاح ✨' : 'Listing updated successfully ✨',
@@ -1254,49 +1461,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const markProductAsSold = (productId: string) => {
+    if (!guardNotSuspended('تحديد الإعلان كمباع', 'mark listings as sold')) return;
     const prod = products.find((p) => p.id === productId);
+    if (!prod || (prod.sellerId !== currentUser.id && !isAdmin) || prod.status !== 'active') {
+      return;
+    }
+
     setProducts((prev) =>
       prev.map((p) => (p.id === productId ? { ...p, status: 'sold' as const } : p))
     );
 
-    // If the product belongs to current user, count it as a successful trusted sale
-    if (prod && prod.sellerId === currentUser.id) {
-      setCurrentUser((prev) => {
-        const nextDeals = (prev.dealsCompleted || 0) + 1;
-        const reports = prev.reportsCount || 0;
-        const nowVerified = isUserVerified(nextDeals, reports);
-        
-        if (nowVerified && !prev.verifiedIdentity) {
-          setTimeout(() => {
-            showToast(
-              language === 'ar' 
-                ? 'لقد تم توثيق حسابك بعد عشره صفقات ناجحه' 
-                : 'Your account has been verified after ten successful deals',
-              'success'
-            );
-          }, 1200);
-
-          setNotifications((prevNotifs) => [
-            {
-              id: 'notif_verified_' + Date.now(),
-              type: 'verification',
-              titleAr: 'توثيق الحساب',
-              titleEn: 'Account Verification',
-              bodyAr: 'لقد تم توثيق حسابك بعد عشره صفقات ناجحه',
-              bodyEn: 'Your account has been verified after ten successful deals',
-              time: 'الآن',
-              read: false,
-            },
-            ...prevNotifs
-          ]);
-        }
-
-        return {
-          ...prev,
-          dealsCompleted: nextDeals,
-          verifiedIdentity: nowVerified,
-        };
+    if (firebaseUser && prod.sellerId === firebaseUser.uid) {
+      markProductAsSoldInFirestore(productId, firebaseUser.uid).catch((err) => {
+        console.error('Error marking product sold atomically in Firestore:', err);
       });
+    }
+
+    // Increment dealsCompleted strictly — verification is Admin-reviewed only
+    if (prod.sellerId === currentUser.id) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        dealsCompleted: (prev.dealsCompleted || 0) + 1,
+        lastSoldProductId: productId,
+      }));
     }
 
     confetti({
@@ -1313,8 +1500,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteProduct = (productId: string) => {
+    if (!guardNotSuspended('حذف الإعلان', 'delete listings')) return;
+    const prod = products.find((p) => p.id === productId);
+    if (!prod || (prod.sellerId !== currentUser.id && !isAdmin)) return;
     setProducts((prev) => prev.filter((p) => p.id !== productId));
     setFavorites((prev) => prev.filter((id) => id !== productId));
+    if (firebaseUser) {
+      adminDeleteProductInFirestore(productId).catch((err) => {
+        console.error('Error deleting product in Firestore:', err);
+      });
+    }
     showToast(
       language === 'ar' ? 'تم حذف الإعلان من القائمة' : 'Listing removed',
       'info'
@@ -1322,8 +1517,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const startOrOpenConversation = (productId: string) => {
+    if (!guardNotSuspended('بدء محادثة', 'start conversations')) return;
     const prod = products.find((p) => p.id === productId);
-    if (!prod) return;
+    if (!prod || prod.sellerId === currentUser.id) return;
 
     // Check if conversation already exists
     const existing = conversations.find(
@@ -1374,6 +1570,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     audioData?: { audioUrl: string; audioDuration: number },
     imageData?: { imageUrl: string; imageTag?: string }
   ) => {
+    if (!guardNotSuspended('إرسال رسائل', 'send messages')) return;
     const trimmedText = text?.trim() || '';
     if (!trimmedText && !audioData && !imageData) return;
 
@@ -1524,22 +1721,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const submitOffer = (productId: string, amount: number, note?: string) => {
-    if (currentUser.status === 'suspended') {
-      const untilDate = currentUser.suspendedUntil 
-        ? new Date(currentUser.suspendedUntil).toLocaleDateString(language === 'ar' ? 'ar-SD' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-        : '';
-      showToast(
-        language === 'ar'
-          ? `⚠️ حسابك موقوف مؤقتاً حتى ${untilDate}. سبب الإيقاف: ${currentUser.suspensionReason || 'مخالفة الشروط'}. لا يمكن تقديم عروض شراء.`
-          : `⚠️ Your account is suspended until ${untilDate}. Reason: ${currentUser.suspensionReason || 'Violation'}. You cannot submit offers.`,
-        'warning'
-      );
+    if (!guardNotSuspended('تقديم عروض شراء', 'submit offers')) {
       setSelectedProductForOffer(null);
       return;
     }
 
     const prod = products.find((p) => p.id === productId);
-    if (!prod) return;
+    if (!prod || prod.status !== 'active' || prod.sellerId === currentUser.id || amount <= 0) {
+      setSelectedProductForOffer(null);
+      return;
+    }
+
+    const existingConv = conversations.find(
+      (c) => c.productId === productId && (c.participantId === prod.sellerId || c.participantId === currentUser.id)
+    );
+    if (existingConv?.activeOffer?.status === 'accepted') {
+      showToast(
+        language === 'ar' ? 'تم قبول العرض مسبقاً ولا يمكن تعديله.' : 'Offer already accepted and locked.',
+        'warning'
+      );
+      setSelectedProductForOffer(null);
+      return;
+    }
 
     const offerId = 'offer_' + Date.now();
     const newOffer = {
@@ -1553,6 +1756,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       originalPrice: prod.price,
       offeredPrice: amount,
       status: 'pending' as const,
+      offerUpdatedBy: currentUser.id,
       createdAt: language === 'ar' ? 'الآن' : 'Now',
     };
 
@@ -1618,30 +1822,56 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     action: 'accept' | 'decline' | 'counter', 
     counterAmount?: number
   ) => {
+    if (!guardNotSuspended('الرد على العرض', 'respond to offers')) return;
+    const nextStatus = action === 'accept' ? 'accepted' : action === 'decline' ? 'declined' : 'countered';
+
     setConversations((prev) =>
       prev.map((c) => {
         if (c.id === conversationId && c.activeOffer) {
+          const allowed = canTransitionOffer(
+            c.activeOffer.status,
+            nextStatus,
+            currentUser.id,
+            c.activeOffer.buyerId,
+            c.activeOffer.sellerId
+          );
+          if (!allowed) {
+            showToast(
+              language === 'ar'
+                ? '⛔ لا يمكن تنفيذ هذا الانتقال للعرض (تحقق من صلاحية المشتري/البائع أو حالة العرض).'
+                : '⛔ Invalid offer transition for current user or offer state.',
+              'warning'
+            );
+            return c;
+          }
+
           let newStatus = c.activeOffer.status;
           let systemText = '';
 
           if (action === 'accept') {
             newStatus = 'accepted';
+            const acceptedPrice =
+              c.activeOffer.status === 'countered' && c.activeOffer.counterPrice
+                ? c.activeOffer.counterPrice
+                : c.activeOffer.offeredPrice;
             systemText = language === 'ar' 
-              ? `🎉 تم قبول العرض بمبلغ: ${c.activeOffer.offeredPrice.toLocaleString()} ${t.currency}!` 
-              : `🎉 Offer of ${c.activeOffer.offeredPrice.toLocaleString()} ${t.currency} has been accepted!`;
+              ? `🎉 تم قبول العرض بمبلغ: ${acceptedPrice.toLocaleString()} ${t.currency}!` 
+              : `🎉 Offer of ${acceptedPrice.toLocaleString()} ${t.currency} has been accepted!`;
             
             confetti({ particleCount: 70, spread: 60 });
             showToast(systemText, 'success');
           } else if (action === 'decline') {
             newStatus = 'declined';
-            systemText = language === 'ar' ? 'تم رفض العرض من قبل البائع.' : 'The offer was declined.';
+            systemText = language === 'ar' ? 'تم رفض العرض.' : 'The offer was declined.';
             showToast(systemText, 'warning');
-          } else if (action === 'counter' && counterAmount) {
+          } else if (action === 'counter' && counterAmount && counterAmount > 0) {
             newStatus = 'countered';
             systemText = language === 'ar'
               ? `قام البائع بتقديم عرض مضاد: ${counterAmount.toLocaleString()} ${t.currency}`
               : `Seller sent a counter offer: ${counterAmount.toLocaleString()} ${t.currency}`;
             showToast(systemText, 'info');
+          } else {
+            return c;
           }
 
           return {
@@ -1650,6 +1880,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               ...c.activeOffer,
               status: newStatus,
               counterPrice: counterAmount || c.activeOffer.counterPrice,
+              offerUpdatedBy: currentUser.id,
+              acceptedBy: newStatus === 'accepted' ? currentUser.id : c.activeOffer.acceptedBy,
+              acceptedAt: newStatus === 'accepted' ? new Date().toISOString() : c.activeOffer.acceptedAt,
             },
             lastMessage: systemText,
             messages: [
@@ -1680,6 +1913,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     type: 'offer' | 'alert' | 'update' | 'system';
     relatedProductId?: string;
   }) => {
+    if (!guardAdmin()) return;
     const newNotif: NotificationItem = {
       id: 'broadcast_' + Date.now(),
       type: notifData.type,
@@ -1708,20 +1942,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
   };
 
-  const flagProduct = (productId: string, reason: string) => {
+  const adminFlagProduct = (productId: string, _reason: string) => {
+    if (!guardAdmin()) return;
     setProducts((prev) =>
       prev.map((p) => (p.id === productId ? { ...p, status: 'flagged' } : p))
     );
+    if (firebaseUser) {
+      adminFlagProductInFirestore(productId).catch((err) => {
+        console.error('Error flagging product in Firestore:', err);
+      });
+    }
     showToast(
-      language === 'ar' ? 'شكراً لإبلاغك. سيتم مراجعة الإعلان من فريق الأمان.' : 'Thank you. Safety team will review the listing.',
+      language === 'ar' ? 'تم تعليق الإعلان للمراجعة من الإدارة.' : 'Listing flagged by administration.',
       'info'
     );
   };
 
   const adminApproveProduct = (productId: string) => {
+    if (!guardAdmin()) return;
     setProducts((prev) =>
       prev.map((p) => (p.id === productId ? { ...p, status: 'active' } : p))
     );
+    if (firebaseUser) {
+      adminApproveProductInFirestore(productId).catch((err) => {
+        console.error('Error approving product in Firestore:', err);
+      });
+    }
     showToast(
       language === 'ar' ? 'تم اعتماد الإعلان ونشره في السوق' : 'Listing approved and restored',
       'success'
@@ -1729,7 +1975,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const adminDeleteProduct = (productId: string) => {
+    if (!guardAdmin()) return;
     setProducts((prev) => prev.filter((p) => p.id !== productId));
+    if (firebaseUser) {
+      adminDeleteProductInFirestore(productId).catch((err) => {
+        console.error('Error deleting product in Firestore:', err);
+      });
+    }
     showToast(
       language === 'ar' ? 'تم حذف الإعلان نهائياً' : 'Listing permanently removed',
       'warning'
@@ -1750,8 +2002,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   useEffect(() => {
-    localStorage.setItem('hatch_reports', JSON.stringify(reports));
-  }, [reports]);
+    if (!firebaseUser) {
+      localStorage.setItem('hatch_reports', JSON.stringify(reports));
+    }
+  }, [reports, firebaseUser]);
 
   const [reportModalData, setReportModalData] = useState<{
     isOpen: boolean;
@@ -1767,6 +2021,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     userId?: string;
     userName?: string;
   }) => {
+    if (!guardNotSuspended('إرسال بلاغ', 'submit reports')) return;
     setReportModalData({
       isOpen: true,
       ...data,
@@ -1785,6 +2040,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     reason: string;
     message: string;
   }) => {
+    if (!guardNotSuspended('إرسال بلاغ', 'submit reports')) return;
     const newReport: ReportTicket = {
       id: 'rep_' + Date.now(),
       reporterId: currentUser.id,
@@ -1799,31 +2055,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       status: 'pending',
     };
 
+    // Security: reporting NEVER flags competitor listings or strips seller verification from client!
     setReports((prev) => [newReport, ...prev]);
-
-    // If product is reported, mark it as flagged for administration
-    if (reportData.reportedProductId) {
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === reportData.reportedProductId
-            ? { ...p, status: 'flagged' }
-            : p
-        )
-      );
+    if (firebaseUser) {
+      submitReportToFirestore(newReport).catch((err) => {
+        console.error('Error submitting report to Firestore:', err);
+      });
     }
 
-    // If user is reported, increase their reportsCount so it directly impacts verification
-    if (reportData.reportedUserId) {
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.sellerId === reportData.reportedUserId
-            ? { ...p, sellerReportsCount: (p.sellerReportsCount || 0) + 1, sellerVerified: false }
-            : p
-        )
-      );
-    }
-
-    // Add a system notification about report dispatched to HATCH administration
     const adminNotif: NotificationItem = {
       id: 'notif_rep_' + Date.now(),
       type: 'system',
@@ -1841,20 +2080,275 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const adminResolveReport = (reportId: string, action: 'resolved' | 'dismissed') => {
+    if (!guardAdmin()) return;
     setReports((prev) =>
       prev.map((r) =>
         r.id === reportId
-          ? { ...r, status: action === 'resolved' ? 'resolved' : 'reviewed' }
+          ? { ...r, status: action }
           : r
       )
     );
+    if (firebaseUser) {
+      adminResolveReportInFirestore(reportId, action).catch((err) => {
+        console.error('Error resolving report in Firestore:', err);
+      });
+    }
     showToast(
       language === 'ar' ? 'تم تحديث حالة البلاغ في لوحة إدارة هتش' : 'Report status updated in HATCH admin',
       'info'
     );
   };
 
+  const submitVerificationRequest = async (
+    note: string,
+    documentUrl?: string
+  ): Promise<boolean> => {
+    if (!guardNotSuspended('تقديم طلب توثيق', 'submit verification requests')) return false;
+    if (currentUser.verifiedIdentity) {
+      showToast(
+        language === 'ar' ? 'حسابك موثق بالفعل بالشارة الذهبية!' : 'Your account already has the Gold Badge!',
+        'info'
+      );
+      return false;
+    }
+    const trimmed = note.trim();
+    if (trimmed.length < 5) {
+      showToast(
+        language === 'ar'
+          ? 'يرجى كتابة نبذة لا تقل عن 5 أحرف لتوضيح نشاطك أو إثباتك للإدارة.'
+          : 'Please enter a note of at least 5 characters for admin review.',
+        'warning'
+      );
+      return false;
+    }
+
+    if (firebaseUser && currentUser.id === firebaseUser.uid) {
+      try {
+        const created = await submitVerificationRequestToFirestore(
+          firebaseUser.uid,
+          currentUser,
+          trimmed,
+          documentUrl
+        );
+        setVerificationRequests((prev) => [created, ...prev]);
+      } catch (err) {
+        console.error('Error submitting verification request:', err);
+        showToast(
+          language === 'ar'
+            ? 'تعذر إرسال طلب التوثيق للخادم، تأكد من عدم وجود طلب معلّق وحاول مجدداً.'
+            : 'Could not submit verification request.',
+          'warning'
+        );
+        return false;
+      }
+    } else {
+      const localReq: VerificationRequest = {
+        id: `vreq_${Date.now()}`,
+        uid: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.businessLogo || currentUser.avatar,
+        accountType: currentUser.accountType || 'personal',
+        city: String(currentUser.city),
+        note: trimmed,
+        documentUrl: documentUrl?.trim() || undefined,
+        status: 'pending',
+        createdAt: language === 'ar' ? 'الآن' : 'Just now',
+        updatedAt: language === 'ar' ? 'الآن' : 'Just now',
+      };
+      setVerificationRequests((prev) => [localReq, ...prev]);
+    }
+
+    showToast(
+      language === 'ar'
+        ? 'تم إرسال طلب التوثيق الذهبي لإدارة هتش للمراجعة ✓'
+        : 'Gold Verification Request sent for Admin review ✓',
+      'success'
+    );
+    return true;
+  };
+
+  const applyVerificationStateLocally = (targetUid: string, verified: boolean) => {
+    setAvailableUsers((prev) =>
+      prev.map((u) => (u.id === targetUid ? { ...u, verifiedIdentity: verified } : u))
+    );
+    if (currentUser.id === targetUid) {
+      setCurrentUser((prev) => ({ ...prev, verifiedIdentity: verified }));
+    }
+    setProducts((prev) =>
+      prev.map((p) => (p.sellerId === targetUid ? { ...p, sellerVerified: verified } : p))
+    );
+  };
+
+  const adminApproveVerification = async (requestId: string) => {
+    if (!guardAdmin()) return;
+    const req = verificationRequests.find((r) => r.id === requestId);
+    if (!req) return;
+
+    if (firebaseUser) {
+      try {
+        await reviewVerificationRequestInFirestore(
+          requestId,
+          req.uid,
+          'approved',
+          firebaseUser.uid
+        );
+      } catch (err) {
+        console.error('Error approving verification request:', err);
+        showToast(
+          language === 'ar' ? 'تعذر اعتماد طلب التوثيق في Firestore' : 'Failed to approve request',
+          'warning'
+        );
+        return;
+      }
+    }
+
+    setVerificationRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? { ...r, status: 'approved', reviewedBy: currentUser.id, reviewedAt: language === 'ar' ? 'الآن' : 'Now' }
+          : r
+      )
+    );
+    applyVerificationStateLocally(req.uid, true);
+    showToast(
+      language === 'ar'
+        ? `تم منح الشارة الذهبية لحساب (${req.userName}) بنجاح ✨`
+        : `Gold Badge approved for (${req.userName}) ✨`,
+      'success'
+    );
+  };
+
+  const adminRejectVerification = async (requestId: string, reason: string) => {
+    if (!guardAdmin()) return;
+    const req = verificationRequests.find((r) => r.id === requestId);
+    if (!req) return;
+    const safeReason = reason.trim() || (language === 'ar' ? 'لم يستوفِ متطلبات التوثيق' : 'Did not meet verification criteria');
+
+    if (firebaseUser) {
+      try {
+        await reviewVerificationRequestInFirestore(
+          requestId,
+          req.uid,
+          'rejected',
+          firebaseUser.uid,
+          safeReason
+        );
+      } catch (err) {
+        console.error('Error rejecting verification request:', err);
+        showToast(
+          language === 'ar' ? 'تعذر رفض طلب التوثيق في Firestore' : 'Failed to reject request',
+          'warning'
+        );
+        return;
+      }
+    }
+
+    setVerificationRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: 'rejected',
+              reviewedBy: currentUser.id,
+              rejectionReason: safeReason,
+              reviewedAt: language === 'ar' ? 'الآن' : 'Now',
+            }
+          : r
+      )
+    );
+    applyVerificationStateLocally(req.uid, false);
+    showToast(
+      language === 'ar'
+        ? `تم رفض طلب التوثيق لحساب (${req.userName})`
+        : `Verification request rejected for (${req.userName})`,
+      'info'
+    );
+  };
+
+  const adminSetUserVerified = async (userId: string, verified: boolean) => {
+    if (!guardAdmin()) return;
+    if (firebaseUser) {
+      try {
+        await setUserVerifiedInFirestore(userId, verified);
+      } catch (err) {
+        console.error('Error setting user verified state:', err);
+        showToast(
+          language === 'ar' ? 'تعذر تحديث حالة التوثيق في الخادم' : 'Failed to update verification state',
+          'warning'
+        );
+        return;
+      }
+    }
+    applyVerificationStateLocally(userId, verified);
+    showToast(
+      verified
+        ? language === 'ar' ? 'تم منح الشارة الذهبية للحساب بنجاح 🏅' : 'Gold Verification Badge granted 🏅'
+        : language === 'ar' ? 'تم سحب شارة التوثيق من الحساب' : 'Verification badge revoked',
+      verified ? 'success' : 'warning'
+    );
+  };
+
+  const adminGrantCredit = async (
+    userId: string,
+    amount: number,
+    reason: string
+  ): Promise<boolean> => {
+    if (!guardAdmin()) return false;
+    const safeAmount = Math.max(1, Math.min(100, Math.floor(amount)));
+    const safeReason =
+      reason.trim() || (language === 'ar' ? 'منحة رصيد تمييز إعلانات من الإدارة' : 'Admin ad boost credit grant');
+
+    if (firebaseUser) {
+      try {
+        const txId = await grantRewardCreditInFirestore(userId, safeAmount, safeReason, firebaseUser.uid);
+        if (userId === currentUser.id) {
+          setRewardCredits((prev) => prev + safeAmount);
+        }
+        showToast(
+          language === 'ar'
+            ? `تم منح +${safeAmount} رصيد تمييز مسجل محاسبياً (${txId}) ✓`
+            : `Granted +${safeAmount} boost credits via ledger (${txId}) ✓`,
+          'success'
+        );
+        return true;
+      } catch (err) {
+        console.error('Error granting credit in Firestore:', err);
+        showToast(
+          language === 'ar'
+            ? 'تعذر منح الرصيد في الخادم (تحقق من وجود ملف users_private).'
+            : 'Could not grant boost credits in Firestore.',
+          'warning'
+        );
+        return false;
+      }
+    }
+
+    const before = userId === currentUser.id ? rewardCredits : 0;
+    const after = before + safeAmount;
+    if (userId === currentUser.id) {
+      setRewardCredits(after);
+    }
+    const localTx: CreditTransaction = {
+      id: `tx_${Date.now()}`,
+      uid: userId,
+      type: 'admin_grant',
+      amount: safeAmount,
+      balanceBefore: before,
+      balanceAfter: after,
+      grantedBy: currentUser.id,
+      reason: safeReason,
+      createdAt: language === 'ar' ? 'الآن' : 'Just now',
+    };
+    setCreditTransactions((prev) => [localTx, ...prev]);
+    showToast(
+      language === 'ar' ? `تم منح +${safeAmount} رصيد تمييز في السجل ✓` : `Granted +${safeAmount} boost credits ✓`,
+      'success'
+    );
+    return true;
+  };
+
   const adminDeleteUser = (userId: string) => {
+    if (!guardAdmin()) return;
     const target = availableUsers.find((u) => u.id === userId);
     const targetName = target?.name || (language === 'ar' ? 'المستخدم' : 'User');
 
@@ -1884,11 +2378,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const adminSuspendUser = (userId: string, days: number, reason: string) => {
+    if (!guardAdmin()) return;
     const target = availableUsers.find((u) => u.id === userId);
     if (!target) return;
 
-    const suspendedAt = new Date().toISOString();
-    const suspendedUntilDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    const suspendedUntilMs = Date.now() + days * 24 * 60 * 60 * 1000;
+    const suspendedUntilDate = new Date(suspendedUntilMs);
     const suspendedUntil = suspendedUntilDate.toISOString();
 
     const formattedDateAr = suspendedUntilDate.toLocaleDateString('ar-SD', {
@@ -1907,8 +2402,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       status: 'suspended',
       suspensionDays: days,
       suspensionReason: reason,
-      suspendedAt,
       suspendedUntil,
+      suspendedUntilMs,
     };
 
     setAvailableUsers((prev) => prev.map((u) => (u.id === userId ? updatedUser : u)));
@@ -1916,6 +2411,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (currentUser.id === userId) {
       setCurrentUser(updatedUser);
       localStorage.setItem('hatch_current_user', JSON.stringify(updatedUser));
+    }
+
+    if (firebaseUser) {
+      adminSuspendUserInFirestore(userId, days, reason).catch((err) => {
+        console.error('Error suspending user in Firestore:', err);
+      });
     }
 
     // Push official suspension notification to notifications queue
@@ -1942,6 +2443,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const adminUnsuspendUser = (userId: string) => {
+    if (!guardAdmin()) return;
     const target = availableUsers.find((u) => u.id === userId);
     if (!target) return;
 
@@ -1950,8 +2452,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       status: 'active',
       suspensionDays: undefined,
       suspensionReason: undefined,
-      suspendedAt: undefined,
       suspendedUntil: undefined,
+      suspendedUntilMs: undefined,
     };
 
     setAvailableUsers((prev) => prev.map((u) => (u.id === userId ? updatedUser : u)));
@@ -1959,6 +2461,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (currentUser.id === userId) {
       setCurrentUser(updatedUser);
       localStorage.setItem('hatch_current_user', JSON.stringify(updatedUser));
+    }
+
+    if (firebaseUser) {
+      adminUnsuspendUserInFirestore(userId).catch((err) => {
+        console.error('Error unsuspending user in Firestore:', err);
+      });
     }
 
     const restoreNotif: NotificationItem = {
@@ -1994,6 +2502,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         activeTab,
         setActiveTab,
         currentUser,
+        isAdmin,
+        isCurrentUserSuspended,
         switchUser,
         availableUsers,
         createNewAccount,
@@ -2066,7 +2576,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         broadcastNotification,
         unreadNotificationsCount,
         unreadMessagesCount,
-        flagProduct,
+        adminFlagProduct,
         adminApproveProduct,
         adminDeleteProduct,
         adminDeleteUser,
@@ -2078,6 +2588,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openReportModal,
         closeReportModal,
         adminResolveReport,
+        verificationRequests,
+        creditTransactions,
+        submitVerificationRequest,
+        adminApproveVerification,
+        adminRejectVerification,
+        adminSetUserVerified,
+        adminGrantCredit,
         reviews,
         selectedSellerForReview,
         isReviewModalOpen,

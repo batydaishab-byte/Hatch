@@ -24,10 +24,13 @@ import {
   Building2,
   ArrowUpCircle,
   Briefcase,
-  LogOut
+  LogOut,
+  Coins,
+  Zap,
+  Send
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Product, resolveAccountType } from '../types';
+import { isUserSuspendedActive, Product, resolveAccountType } from '../types';
 import { ProductCard } from './ProductCard';
 import { EditListingModal } from './EditListingModal';
 import { SoldConfirmModal } from './SoldConfirmModal';
@@ -50,6 +53,11 @@ export const ProfileView: React.FC = () => {
     signInWithGoogle,
     signOutGoogle,
     openReviewModal,
+    isCurrentUserSuspended,
+    verificationRequests,
+    submitVerificationRequest,
+    rewardCredits,
+    useRewardCreditForListing,
     t, 
     language 
   } = useApp();
@@ -60,48 +68,62 @@ export const ProfileView: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'my_ads' | 'sold_ads' | 'saved' | 'safety'>('my_ads');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [soldConfirmProduct, setSoldConfirmProduct] = useState<Product | null>(null);
+  const [verificationNote, setVerificationNote] = useState('');
+  const [verificationDocUrl, setVerificationDocUrl] = useState('');
+  const [isSubmittingVerification, setIsSubmittingVerification] = useState(false);
 
   const myActiveAds = products.filter((p) => p.sellerId === currentUser.id && p.status !== 'sold');
   const mySoldAds = products.filter((p) => p.sellerId === currentUser.id && p.status === 'sold');
   const favoritedProducts = products.filter((p) => favorites.includes(p.id));
-  const isVerified = currentUser.dealsCompleted >= 10 && (!currentUser.reportsCount || currentUser.reportsCount === 0);
+  const isVerified = Boolean(currentUser.verifiedIdentity);
+  const myVerificationRequests = verificationRequests.filter((req) => req.uid === currentUser.id);
+  const latestVerificationRequest = myVerificationRequests[0] || null;
+  const hasPendingVerification = latestVerificationRequest?.status === 'pending';
 
   return (
     <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 pb-24 space-y-6">
-      {/* Persona Switcher Banner (Crucial for testing all marketplace roles) */}
+      {/* Persona Switcher Banner (Disabled when signed into real Firebase session) */}
       <div className="p-3.5 bg-neutral-900 border border-neutral-800 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
         <div className="flex items-center gap-2 text-xs text-neutral-300">
           <Users className="w-4 h-4 text-amber-400" />
-          <span className="font-semibold">{t.switchPersona}:</span>
+          <span className="font-semibold">
+            {firebaseUser
+              ? (language === 'ar' ? 'جلسة Google موثقة' : 'Verified Google Session')
+              : t.switchPersona}:
+          </span>
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar w-full sm:w-auto">
-          {availableUsers.map((user) => (
-            <button
-              key={user.id}
-              onClick={() => switchUser(user.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
-                currentUser.id === user.id
-                  ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md font-bold'
-                  : 'bg-neutral-800/80 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
-              }`}
-            >
-              <img
-                src={user.avatar}
-                alt={user.name}
-                className="w-4 h-4 rounded-full object-cover"
-              />
-              <span>{user.name.split(' ')[0]}</span>
-              {user.status === 'suspended' && (
-                <span className="text-[10px] bg-red-600/90 text-white font-bold px-1.5 py-0.2 rounded-full animate-pulse">
-                  {language === 'ar' ? 'موقوف' : 'Suspended'}
-                </span>
-              )}
-              {user.role === 'admin' && (
-                <span className="text-[10px] bg-red-900/60 text-red-300 px-1 rounded">Admin</span>
-              )}
-            </button>
-          ))}
+          {!firebaseUser ? (
+            availableUsers.map((user) => (
+              <button
+                key={user.id}
+                onClick={() => switchUser(user.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
+                  currentUser.id === user.id
+                    ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md font-bold'
+                    : 'bg-neutral-800/80 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                }`}
+              >
+                <img
+                  src={user.avatar}
+                  alt={user.name}
+                  className="w-4 h-4 rounded-full object-cover"
+                />
+                <span>{user.name.split(' ')[0]}</span>
+                {isUserSuspendedActive(user) && (
+                  <span className="text-[10px] bg-red-600/90 text-white font-bold px-1.5 py-0.2 rounded-full animate-pulse">
+                    {language === 'ar' ? 'موقوف' : 'Suspended'}
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 whitespace-nowrap">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span>{firebaseUser.email || currentUser.name}</span>
+            </span>
+          )}
 
           {/* Create Account Button in Switcher */}
           <button
@@ -137,7 +159,7 @@ export const ProfileView: React.FC = () => {
       </div>
 
       {/* شريط وتنبيه إيقاف الحساب من قبل الإدارة مع السبب والمدة */}
-      {currentUser.status === 'suspended' && (
+      {isCurrentUserSuspended && (
         <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-r from-red-950/80 via-rose-950/60 to-neutral-900 border-2 border-red-500/80 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 end-0 w-64 h-64 bg-red-500/10 rounded-full blur-3xl pointer-events-none" />
           <div className="flex flex-col sm:flex-row items-start gap-4 relative z-10">
@@ -203,7 +225,7 @@ export const ProfileView: React.FC = () => {
             />
             {isVerified && (
               <div 
-                className="absolute bottom-0 end-0 bg-emerald-500 text-white p-1 rounded-full border-2 border-neutral-900 shadow-md"
+                className="absolute bottom-0 end-0 bg-amber-500 text-neutral-950 p-1 rounded-full border-2 border-neutral-900 shadow-md"
                 title={t.verifiedSeller}
               >
                 <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
@@ -237,14 +259,14 @@ export const ProfileView: React.FC = () => {
                   <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2 flex-wrap">
                     {currentUser.name}
                     {isVerified ? (
-                      <span className="text-xs bg-emerald-950/80 text-emerald-400 border border-emerald-800 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>{language === 'ar' ? 'موثق (10+ صفقات)' : 'Verified (10+ Deals)'}</span>
+                      <span className="text-xs bg-amber-950/80 text-amber-300 border border-amber-500/40 px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-sm">
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                        <span>{language === 'ar' ? 'موثق بالشارة الذهبية ✓' : 'Gold Verified ✓'}</span>
                       </span>
                     ) : (
-                      <span className="text-xs bg-amber-500/10 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                        <Shield className="w-3.5 h-3.5 text-amber-400" />
-                        <span>{language === 'ar' ? 'قيد التوثيق' : 'In Progress'}</span>
+                      <span className="text-xs bg-neutral-800/80 text-neutral-300 border border-neutral-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                        <Shield className="w-3.5 h-3.5 text-neutral-400" />
+                        <span>{language === 'ar' ? 'غير موثق' : 'Unverified'}</span>
                       </span>
                     )}
                   </h2>
@@ -381,49 +403,129 @@ export const ProfileView: React.FC = () => {
               </div>
             </div>
 
-            {/* Verification Status Banner based on 10 trusted sales with zero reports */}
+            {/* Gold Verification Badge Status Card + Request Form */}
             {isVerified ? (
-              <div className="text-xs bg-emerald-950/40 p-3 rounded-2xl border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-start">
-                <div className="flex items-center gap-2 text-emerald-300 min-w-0">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <div className="text-xs bg-amber-950/35 p-3.5 rounded-2xl border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-start">
+                <div className="flex items-center gap-2 text-amber-200 min-w-0">
+                  <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                   <span className="font-semibold leading-relaxed">
-                    {language === 'ar'
-                      ? 'حساب موثق وموثوق: أنجز أكثر من 10 صفقات ناجحة بسجل ناصع وبدون أي بلاغ أو مخالفة.'
-                      : 'Verified Account: Completed 10+ trusted sales with a clean record and zero violations.'}
+                    {t.verifiedUserText}
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-600/40 px-2 py-0.5 rounded-lg shrink-0 flex items-center gap-1 self-start sm:self-auto">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  <span>{language === 'ar' ? 'سجل ناصع (0 بلاغات)' : '0 Reports'}</span>
+                <span className="text-[10px] font-bold text-amber-300 bg-amber-950/90 border border-amber-500/40 px-2.5 py-0.5 rounded-lg shrink-0 flex items-center gap-1 self-start sm:self-auto">
+                  <CheckCircle2 className="w-3 h-3 text-amber-400" />
+                  <span>{language === 'ar' ? 'موثق رسمياً' : 'Admin Verified'}</span>
                 </span>
               </div>
             ) : (
-              <div className="text-xs bg-neutral-950/90 p-3 rounded-2xl border border-neutral-800 space-y-2 text-start">
+              <div className="text-xs bg-neutral-950/90 p-3.5 rounded-2xl border border-neutral-800 space-y-2.5 text-start">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                   <div className="flex items-center gap-2 text-neutral-200">
-                    <Shield className="w-4 h-4 text-amber-400 shrink-0" />
+                    <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
                     <span className="font-bold text-white">
-                      {language === 'ar' ? 'شروط التوثيق في هتش (10 صفقات موثوقة بدون مخالفات)' : 'HATCH Verification: 10 Trusted Deals & Zero Violations'}
+                      {language === 'ar' ? 'طلب شارة التوثيق الذهبية (مراجعة الإدارة)' : 'Gold Verification Badge Request (Admin Reviewed)'}
                     </span>
                   </div>
-                  <span className="text-[11px] font-mono text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg border border-amber-500/20 self-start sm:self-auto">
-                    {currentUser.dealsCompleted} / 10 {language === 'ar' ? 'صفقات مكتملة' : 'completed'}
-                  </span>
+                  {hasPendingVerification && (
+                    <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg self-start sm:self-auto">
+                      {language === 'ar' ? 'طلبك قيد المراجعة ⏳' : 'Pending Review ⏳'}
+                    </span>
+                  )}
                 </div>
+
                 <p className="text-[11px] text-neutral-400 leading-relaxed">
-                  {language === 'ar'
-                    ? 'التوثيق ليس بالهوية، بل يظهر تلقائياً بعد إتمام 10 عمليات بيع موثوقة بدون أي إبلاغ أو مخالفة للبائع أو المشتري.'
-                    : 'Verification does not require ID; it is automatically unlocked after completing 10 trusted sales with zero reports or violations for seller or buyer.'}
+                  {t.verifiedCriteriaDesc}
                 </p>
-                {/* Visual Progress Bar */}
-                <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-amber-500 to-emerald-400 transition-all duration-500 rounded-full"
-                    style={{ width: `${Math.min(100, (currentUser.dealsCompleted / 10) * 100)}%` }}
-                  />
-                </div>
+
+                {latestVerificationRequest?.status === 'rejected' && latestVerificationRequest.rejectionReason && (
+                  <div className="p-2.5 rounded-xl bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-200">
+                    <strong className="text-rose-300">
+                      {language === 'ar' ? 'ملاحظة الإدارة على الطلب السابق: ' : 'Previous review note: '}
+                    </strong>
+                    <span>{latestVerificationRequest.rejectionReason}</span>
+                  </div>
+                )}
+
+                {!hasPendingVerification && !isCurrentUserSuspended && (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (verificationNote.trim().length < 5) return;
+                      setIsSubmittingVerification(true);
+                      const ok = await submitVerificationRequest(
+                        verificationNote.trim(),
+                        verificationDocUrl.trim() || undefined
+                      );
+                      setIsSubmittingVerification(false);
+                      if (ok) {
+                        setVerificationNote('');
+                        setVerificationDocUrl('');
+                      }
+                    }}
+                    className="space-y-2 pt-1"
+                  >
+                    <input
+                      type="text"
+                      value={verificationNote}
+                      onChange={(e) => setVerificationNote(e.target.value)}
+                      placeholder={
+                        language === 'ar'
+                          ? 'اكتب نبذة عن نشاطك أو متجرك لطلب التوثيق الذهبي (5 أحرف على الأقل)...'
+                          : 'Briefly describe your store or trading activity (min 5 chars)...'
+                      }
+                      minLength={5}
+                      maxLength={500}
+                      required
+                      className="w-full bg-neutral-900 border border-neutral-800 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none"
+                    />
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="url"
+                        value={verificationDocUrl}
+                        onChange={(e) => setVerificationDocUrl(e.target.value)}
+                        dir="ltr"
+                        placeholder={
+                          language === 'ar'
+                            ? 'رابط صفحة أو مستند داعم HTTPS (اختياري)'
+                            : 'Optional HTTPS link / document URL'
+                        }
+                        className="flex-1 bg-neutral-900 border border-neutral-800 focus:border-amber-400 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none text-left"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSubmittingVerification || verificationNote.trim().length < 5}
+                        className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 transition-all"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{language === 'ar' ? 'إرسال طلب التوثيق' : 'Submit Request'}</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             )}
+
+            {/* Spark-Safe Ad Boost Credits Card */}
+            <div className="text-xs bg-neutral-950/90 p-3.5 rounded-2xl border border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-start">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+                  <Coins className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-white flex items-center gap-2">
+                    <span>{language === 'ar' ? 'رصيد تمييز الإعلانات' : 'Listing Boost Credits'}</span>
+                    <span className="font-mono font-black text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg">
+                      {rewardCredits}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-400">
+                    {language === 'ar'
+                      ? 'تُمنح الأرصدة حصرياً من إدارة هتش، ويمكنك صرف رصيد لتمييز أي إعلان نشط لك.'
+                      : 'Credits are granted exclusively by HATCH Admin and spent atomically to feature your active listings.'}
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -520,7 +622,7 @@ export const ProfileView: React.FC = () => {
                   product={product} 
                   showOfferButton={false}
                   footerActions={
-                    <div className="flex items-center gap-1.5 w-full">
+                    <div className="flex items-center gap-1.5 w-full flex-wrap">
                       {/* زر تعديل الإعلان */}
                       <button
                         type="button"
@@ -531,6 +633,21 @@ export const ProfileView: React.FC = () => {
                         <Pencil className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                         <span>{t.editAd}</span>
                       </button>
+
+                      {/* زر تمييز الإعلان باستخدام الرصيد */}
+                      {!product.featured && product.status === 'active' && rewardCredits > 0 && !isCurrentUserSuspended && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void useRewardCreditForListing(product.id);
+                          }}
+                          className="flex-1 py-1.5 px-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-[11px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+                          title={language === 'ar' ? 'تمييز الإعلان (-1 رصيد)' : 'Boost Listing (-1 credit)'}
+                        >
+                          <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>{language === 'ar' ? 'تمييز (-1)' : 'Boost (-1)'}</span>
+                        </button>
+                      )}
 
                       {/* زر تم البيع */}
                       <button

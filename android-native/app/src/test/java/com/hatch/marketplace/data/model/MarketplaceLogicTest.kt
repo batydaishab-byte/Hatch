@@ -73,32 +73,50 @@ class MarketplaceLogicTest {
     }
 
     @Test
-    fun autoVerifyTriggersAtTenDealsAndZeroReportsOnly() {
-        assertFalse(MarketplaceLogic.shouldAutoVerify(dealsCompleted = 9, reportsCount = 0))
-        assertFalse(MarketplaceLogic.shouldAutoVerify(dealsCompleted = 10, reportsCount = 1))
-        assertTrue(MarketplaceLogic.shouldAutoVerify(dealsCompleted = 10, reportsCount = 0))
-        assertTrue(MarketplaceLogic.shouldAutoVerify(dealsCompleted = 15, reportsCount = 0))
+    fun adminRoleRequiresServerVerifiedClaimOrAdminDocOnly() {
+        assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = true, hasAdminDoc = false))
+        assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = false, hasAdminDoc = true))
+        assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = true, hasAdminDoc = true))
+        assertFalse(MarketplaceLogic.isAdminRole(hasAdminClaim = false, hasAdminDoc = false))
     }
 
     @Test
-    fun adminRoleRecognizesExplicitRoleOrVerifiedOwnerEmail() {
-        assertTrue(MarketplaceLogic.isAdminRole(role = "admin", email = "someone@example.com"))
-        assertTrue(MarketplaceLogic.isAdminRole(role = "user", email = "batydaishab@gmail.com"))
-        assertTrue(MarketplaceLogic.isAdminRole(role = null, email = "BATYDAISHAB@GMAIL.COM"))
-        assertFalse(MarketplaceLogic.isAdminRole(role = "user", email = "trader@hatch.sd"))
+    fun offerTransitionEnforcesParticipantRolesAndStateMachine() {
+        val conv = Conversation(
+            id = "c1",
+            productId = "p1",
+            buyerId = "buyer_1",
+            sellerId = "seller_1",
+            participantIds = listOf("buyer_1", "seller_1"),
+            offerStatus = OfferStatus.PENDING.wireValue,
+            offerAmount = 500_000.0,
+            offerUpdatedBy = "buyer_1"
+        )
+        // Buyer cannot accept their own pending offer
+        assertTrue(MarketplaceLogic.validateOfferTransition(conv, "buyer_1", OfferTransitionAction.ACCEPT_OFFER).isFailure)
+        // Non-participant cannot touch offer
+        assertTrue(MarketplaceLogic.validateOfferTransition(conv, "intruder", OfferTransitionAction.ACCEPT_OFFER).isFailure)
+        // Seller can accept buyer's offer
+        assertTrue(MarketplaceLogic.validateOfferTransition(conv, "seller_1", OfferTransitionAction.ACCEPT_OFFER).isSuccess)
+        // Seller can counter with a positive amount
+        assertTrue(MarketplaceLogic.validateOfferTransition(conv, "seller_1", OfferTransitionAction.COUNTER_OFFER, counterAmount = 550_000.0).isSuccess)
+        // Once accepted, no further offer transitions are allowed
+        val acceptedConv = conv.copy(offerStatus = OfferStatus.ACCEPTED.wireValue)
+        assertTrue(MarketplaceLogic.validateOfferTransition(acceptedConv, "seller_1", OfferTransitionAction.DECLINE_OFFER).isFailure)
     }
 
     @Test
-    fun suspensionLogicHandlesActiveFutureAndExpiredSuspensions() {
+    fun suspensionLogicHandlesActiveFutureAndExpiredSuspensionsWithTimestamp() {
         val now = 1_700_000_000_000L
-        assertFalse(MarketplaceLogic.isUserSuspended("active", null, now))
+        assertFalse(MarketplaceLogic.isUserSuspended("active", null, null, now))
 
         val futureIso = MarketplaceLogic.buildSuspensionEndIso(days = 7, nowMillis = now)
-        assertTrue(MarketplaceLogic.isUserSuspended("suspended", futureIso, now))
+        val futureTs = MarketplaceLogic.buildSuspensionEndTimestamp(days = 7, nowMillis = now)
+        assertTrue(MarketplaceLogic.isUserSuspended("suspended", futureIso, futureTs, now))
 
         // 8 days later -> suspension expired
         val afterExpiry = now + 8 * 86_400_000L
-        assertFalse(MarketplaceLogic.isUserSuspended("suspended", futureIso, afterExpiry))
+        assertFalse(MarketplaceLogic.isUserSuspended("suspended", futureIso, futureTs, afterExpiry))
     }
 
     @Test
@@ -427,5 +445,134 @@ class MarketplaceLogicTest {
         // Verify CommercialDirectoryEntry exposes zero phone/email/whatsapp fields
         val fieldNames = CommercialDirectoryEntry::class.java.declaredFields.map { it.name.lowercase() }
         assertFalse(fieldNames.any { it.contains("phone") || it.contains("email") || it.contains("whatsapp") || it.contains("suspension") })
+    }
+
+    @Test
+    fun completingTenOrMoreDealsNeverAutoVerifiesAccountOrProductSnapshot() {
+        val userWithTwelveDeals = PublicUser(
+            uid = "u_deals_12",
+            name = "خالد مصطفى",
+            city = "الخرطوم (ولاية الخرطوم)",
+            dealsCompleted = 12,
+            verifiedIdentity = false
+        )
+        assertFalse(userWithTwelveDeals.verifiedIdentity)
+        val updatedDeals = userWithTwelveDeals.copy(dealsCompleted = userWithTwelveDeals.dealsCompleted + 1)
+        assertEquals(13, updatedDeals.dealsCompleted)
+        assertFalse(updatedDeals.verifiedIdentity)
+    }
+
+    @Test
+    fun offerStateMachineBlocksSellerCounterOnAcceptedAndOffersOnSoldOrFlaggedProducts() {
+        val pendingConv = Conversation(
+            id = "c_sec",
+            productId = "p_sec",
+            buyerId = "b_sec",
+            sellerId = "s_sec",
+            participantIds = listOf("b_sec", "s_sec"),
+            offerStatus = OfferStatus.PENDING.wireValue,
+            offerAmount = 400_000.0
+        )
+
+        // Seller cannot accept on a SOLD or FLAGGED product
+        assertTrue(
+            MarketplaceLogic.validateOfferTransition(
+                currentStatus = OfferStatus.PENDING.wireValue,
+                actorUid = "s_sec",
+                buyerId = "b_sec",
+                sellerId = "s_sec",
+                action = OfferTransitionAction.ACCEPT_OFFER,
+                productStatus = ProductStatus.SOLD.wireValue
+            ).isFailure
+        )
+        assertTrue(
+            MarketplaceLogic.validateOfferTransition(
+                currentStatus = OfferStatus.PENDING.wireValue,
+                actorUid = "s_sec",
+                buyerId = "b_sec",
+                sellerId = "s_sec",
+                action = OfferTransitionAction.ACCEPT_OFFER,
+                productStatus = ProductStatus.FLAGGED.wireValue
+            ).isFailure
+        )
+
+        // Seller cannot accept their own counter offer; only buyer can accept COUNTERED
+        val countered = pendingConv.copy(offerStatus = OfferStatus.COUNTERED.wireValue, counterAmount = 450_000.0)
+        assertTrue(MarketplaceLogic.validateOfferTransition(countered, "s_sec", OfferTransitionAction.ACCEPT_OFFER).isFailure)
+        assertTrue(MarketplaceLogic.validateOfferTransition(countered, "b_sec", OfferTransitionAction.ACCEPT_OFFER).isSuccess)
+
+        // Accepted is terminal: even buyer cannot submit a new offer or counter
+        val accepted = pendingConv.copy(offerStatus = OfferStatus.ACCEPTED.wireValue)
+        assertTrue(
+            MarketplaceLogic.validateOfferTransition(accepted, "b_sec", OfferTransitionAction.SUBMIT_OFFER, amount = 300_000.0).isFailure
+        )
+        assertTrue(
+            MarketplaceLogic.validateOfferTransition(accepted, "s_sec", OfferTransitionAction.COUNTER_OFFER, counterAmount = 500_000.0).isFailure
+        )
+    }
+
+    @Test
+    fun sellerRatingEligibilityRequiresAcceptedSoldDealBlocksGuestsSellersSuspendedAndDuplicates() {
+        val soldProd = Product(id = "prod_sold", sellerId = "seller_1", status = ProductStatus.SOLD.wireValue)
+        val activeProd = Product(id = "prod_active", sellerId = "seller_1", status = ProductStatus.ACTIVE.wireValue)
+        val products = listOf(soldProd, activeProd)
+
+        val acceptedSoldConv = Conversation(
+            id = "conv_sold",
+            productId = "prod_sold",
+            buyerId = "buyer_1",
+            sellerId = "seller_1",
+            participantIds = listOf("buyer_1", "seller_1"),
+            offerStatus = OfferStatus.ACCEPTED.wireValue
+        )
+        val pendingSoldConv = acceptedSoldConv.copy(id = "conv_pending", offerStatus = OfferStatus.PENDING.wireValue)
+        val acceptedActiveConv = acceptedSoldConv.copy(id = "conv_active", productId = "prod_active")
+
+        // Guest -> null
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, emptyList(), null, "seller_1", "prod_sold")
+        )
+        // Seller rating self -> null
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, emptyList(), "seller_1", "seller_1", "prod_sold")
+        )
+        // Suspended buyer -> null
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, emptyList(), "buyer_1", "seller_1", "prod_sold", isSuspended = true)
+        )
+        // Offer not accepted even if sold -> null
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(pendingSoldConv), products, emptyList(), "buyer_1", "seller_1", "prod_sold")
+        )
+        // Accepted offer on still-active product -> null
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedActiveConv), products, emptyList(), "buyer_1", "seller_1", "prod_active")
+        )
+        // Eligible buyer with accepted + sold deal -> returns conversation
+        assertEquals(
+            acceptedSoldConv,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, emptyList(), "buyer_1", "seller_1", "prod_sold")
+        )
+        // Duplicate review already exists -> null
+        val existingReview = UserReview(
+            id = MarketplaceLogic.buildDeterministicReviewId("prod_sold", "buyer_1"),
+            sellerId = "seller_1",
+            reviewerId = "buyer_1",
+            productId = "prod_sold",
+            conversationId = "conv_sold",
+            rating = 5,
+            comment = "صفقة ممتازة"
+        )
+        assertEquals("prod_sold_buyer_1", existingReview.id)
+        assertTrue(MarketplaceLogic.hasBuyerAlreadyReviewedProduct(listOf(existingReview), "buyer_1", "prod_sold"))
+        assertEquals(
+            null,
+            MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, listOf(existingReview), "buyer_1", "seller_1", "prod_sold")
+        )
     }
 }

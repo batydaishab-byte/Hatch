@@ -23,14 +23,14 @@ class MonetizationRepository @Inject constructor(
     private val clients: FirebaseClientsHolder,
     private val cloudinaryService: CloudinaryMediaService
 ) {
-    fun observeSponsoredAds(isVerifiedAdminEmail: Boolean): Flow<List<SponsoredAdItem>> = callbackFlow {
+    fun observeSponsoredAds(hasAdminClaim: Boolean): Flow<List<SponsoredAdItem>> = callbackFlow {
         val db = clients.firestore
         if (db == null) {
             trySend(emptyList())
             close()
             return@callbackFlow
         }
-        val query = if (isVerifiedAdminEmail) {
+        val query = if (hasAdminClaim) {
             db.collection("sponsored_ads")
         } else {
             db.collection("sponsored_ads").whereEqualTo("isActive", true)
@@ -223,13 +223,18 @@ class MonetizationRepository @Inject constructor(
 
     suspend fun suspendUser(uid: String, days: Int, reason: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
-        val untilIso = MarketplaceLogic.buildSuspensionEndIso(days)
+        val safeDays = days.coerceIn(1, 3650)
+        val nowMillis = System.currentTimeMillis()
+        val untilIso = MarketplaceLogic.buildSuspensionEndIso(safeDays, nowMillis)
+        val untilTs = MarketplaceLogic.buildSuspensionEndTimestamp(safeDays, nowMillis)
+        val cleanReason = reason.trim().take(500)
         db.collection("users_public").document(uid).update(
             mapOf(
                 "status" to UserStatus.SUSPENDED.wireValue,
-                "suspensionDays" to days.coerceIn(1, 3650),
+                "suspensionDays" to safeDays,
                 "suspendedUntil" to untilIso,
-                "suspensionReason" to reason.trim().take(500),
+                "suspendedUntilTs" to untilTs,
+                "suspensionReason" to cleanReason,
                 "verifiedIdentity" to false,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -255,10 +260,10 @@ class MonetizationRepository @Inject constructor(
                 hashMapOf<String, Any>(
                     "id" to notifId,
                     "type" to "alert",
-                    "titleAr" to "تم إيقاف حسابك مؤقتاً لمدة $days يوم",
-                    "titleEn" to "Account suspended for $days days",
-                    "bodyAr" to "السبب: $reason",
-                    "bodyEn" to "Reason: $reason",
+                    "titleAr" to "تم إيقاف حسابك مؤقتاً لمدة $safeDays يوم",
+                    "titleEn" to "Account suspended for $safeDays days",
+                    "bodyAr" to "السبب: $cleanReason",
+                    "bodyEn" to "Reason: $cleanReason",
                     "read" to false,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -270,9 +275,10 @@ class MonetizationRepository @Inject constructor(
         db.collection("users_public").document(uid).update(
             mapOf(
                 "status" to UserStatus.ACTIVE.wireValue,
-                "suspensionDays" to 0,
-                "suspendedUntil" to "",
-                "suspensionReason" to "",
+                "suspensionDays" to FieldValue.delete(),
+                "suspendedUntil" to FieldValue.delete(),
+                "suspendedUntilTs" to FieldValue.delete(),
+                "suspensionReason" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
         ).await()
@@ -286,6 +292,23 @@ class MonetizationRepository @Inject constructor(
                     )
                 ).await()
             }
+        }
+        runCatching {
+            val notifId = HatchFormatters.sanitizeFirestoreId("unsusp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+            db.collection("users_private").document(uid)
+                .collection("notifications").document(notifId)
+                .set(
+                    hashMapOf<String, Any>(
+                        "id" to notifId,
+                        "type" to "system",
+                        "titleAr" to "تم رفع الإيقاف عن حسابك ✅",
+                        "titleEn" to "Your account suspension has been lifted ✅",
+                        "bodyAr" to "يمكنك الآن استئناف النشر والتفاوض على سوق هتش مع الالتزام بقوانين الاستخدام.",
+                        "bodyEn" to "You can now resume listing and negotiating on HATCH Marketplace.",
+                        "read" to false,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
         }
     }
 

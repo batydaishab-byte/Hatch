@@ -98,5 +98,15 @@ class HatchStringsParityTest {
             assertTrue(ar.guestPromptMessage(reason).isNotBlank())
             assertTrue(en.guestPromptMessage(reason).isNotBlank())
         }
+
+        assertTrue(ar.goldBadgeGrantedTitle.isNotBlank() && en.goldBadgeGrantedTitle.isNotBlank())
+        assertTrue(ar.goldBadgeAdminDesc.isNotBlank() && en.goldBadgeAdminDesc.isNotBlank())
+        assertTrue(ar.requestGoldVerification.isNotBlank() && en.requestGoldVerification.isNotBlank())
+        assertTrue(ar.verificationPendingLabel.isNotBlank() && en.verificationPendingLabel.isNotBlank())
+        assertTrue(ar.verificationRejectedLabel.isNotBlank() && en.verificationRejectedLabel.isNotBlank())
+        assertTrue(ar.verificationNoteLabel.isNotBlank() && en.verificationNoteLabel.isNotBlank())
+        assertTrue(ar.verificationDocUrlLabel.isNotBlank() && en.verificationDocUrlLabel.isNotBlank())
+        assertTrue(ar.submitVerificationBtn.isNotBlank() && en.submitVerificationBtn.isNotBlank())
+        assertTrue(ar.dealRatedLabel.isNotBlank() && en.dealRatedLabel.isNotBlank())
     }
 }

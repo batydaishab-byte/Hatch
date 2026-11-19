@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Campaign
+import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Delete
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.rounded.MonetizationOn
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -74,6 +76,7 @@ import com.hatch.marketplace.data.model.AdRevenueStats
 import com.hatch.marketplace.data.model.AdminSubTab
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.Conversation
+import com.hatch.marketplace.data.model.CreditTransaction
 import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.NotificationItem
@@ -83,6 +86,7 @@ import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.ReportTicket
 import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.UserStatus
+import com.hatch.marketplace.data.model.VerificationRequest
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.modals.HatchField
 import com.hatch.marketplace.ui.modals.SelectablePill
@@ -111,6 +115,9 @@ fun AdminScreen(
     conversations: List<Conversation>,
     users: List<PublicUser>,
     notifications: List<NotificationItem>,
+    verificationRequests: List<VerificationRequest>,
+    creditTransactions: List<CreditTransaction>,
+    pendingVerificationRequestsCount: Int,
     sponsoredAds: List<SponsoredAdItem>,
     adConfig: AdMobConfig,
     adStats: AdRevenueStats,
@@ -126,6 +133,10 @@ fun AdminScreen(
     onSuspendUser: (uid: String, days: Int, reason: String) -> Unit,
     onUnsuspendUser: (String) -> Unit,
     onDeleteUser: (String) -> Unit,
+    onApproveVerification: (VerificationRequest) -> Unit,
+    onRejectVerification: (VerificationRequest, String) -> Unit,
+    onSetUserVerified: (uid: String, verified: Boolean, reason: String) -> Unit,
+    onGrantCredit: (uid: String, amount: Int, reason: String) -> Unit,
     onSendBroadcast: (type: String, titleAr: String, titleEn: String, bodyAr: String, bodyEn: String, relatedProductId: String?) -> Unit,
     onCreateSponsoredAd: (SponsoredAdItem) -> Unit,
     onToggleAdActive: (String, Boolean) -> Unit,
@@ -147,6 +158,8 @@ fun AdminScreen(
     var showBroadcastComposer by remember { mutableStateOf(false) }
     var suspendTarget by remember { mutableStateOf<SuspendTarget?>(null) }
     var deleteUserConfirm by remember { mutableStateOf<PublicUser?>(null) }
+    var grantCreditTarget by remember { mutableStateOf<PublicUser?>(null) }
+    var rejectVerifTarget by remember { mutableStateOf<VerificationRequest?>(null) }
     var showCreateAdDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -242,6 +255,7 @@ fun AdminScreen(
         ) {
             val tabItems = listOf(
                 AdminSubTab.REPORTS to (if (isAr) "البلاغات (${pendingReports.size})" else "Reports (${pendingReports.size})"),
+                AdminSubTab.VERIFICATION to (if (isAr) "التوثيق ($pendingVerificationRequestsCount)" else "Verify ($pendingVerificationRequestsCount)"),
                 AdminSubTab.BROADCAST to (if (isAr) "الإشعارات" else "Broadcasts"),
                 AdminSubTab.SOLD to (if (isAr) "المباعة (${soldProducts.size})" else "Sold (${soldProducts.size})"),
                 AdminSubTab.CONVERSATIONS to (if (isAr) "المحادثات (${conversations.size})" else "Chats (${conversations.size})"),
@@ -284,6 +298,17 @@ fun AdminScreen(
                         )
                     }
                 }
+            }
+
+            AdminSubTab.VERIFICATION -> {
+                VerificationAdminTab(
+                    requests = verificationRequests,
+                    users = users,
+                    isAr = isAr,
+                    isSubmitting = isSubmitting,
+                    onApprove = onApproveVerification,
+                    onRejectClick = { rejectVerifTarget = it }
+                )
             }
 
             AdminSubTab.BROADCAST -> {
@@ -418,6 +443,7 @@ fun AdminScreen(
                     sponsoredAds = sponsoredAds,
                     adConfig = adConfig,
                     adStats = adStats,
+                    creditTransactions = creditTransactions,
                     cloudinaryQuota = cloudinaryQuota,
                     language = language,
                     strings = strings,
@@ -439,6 +465,18 @@ fun AdminScreen(
                     isAr = isAr,
                     onSuspendClick = { u -> suspendTarget = SuspendTarget(u.uid, u.name) },
                     onUnsuspendClick = onUnsuspendUser,
+                    onToggleVerified = { u ->
+                        onSetUserVerified(
+                            u.uid,
+                            !u.verifiedIdentity,
+                            if (!u.verifiedIdentity) {
+                                if (isAr) "اعتماد يدوي من المشرف" else "Admin manual verification"
+                            } else {
+                                if (isAr) "إزالة الشارة من المشرف" else "Revoked by Admin"
+                            }
+                        )
+                    },
+                    onGrantCreditClick = { u -> grantCreditTarget = u },
                     onDeleteClick = { u -> deleteUserConfirm = u }
                 )
             }
@@ -492,6 +530,34 @@ fun AdminScreen(
             onCreate = { ad ->
                 onCreateSponsoredAd(ad)
                 showCreateAdDialog = false
+            }
+        )
+    }
+
+    // Grant Boost Credit Dialog
+    grantCreditTarget?.let { target ->
+        GrantCreditAdminDialog(
+            target = target,
+            isAr = isAr,
+            isSubmitting = isSubmitting,
+            onDismiss = { grantCreditTarget = null },
+            onConfirm = { amount, reason ->
+                onGrantCredit(target.uid, amount, reason)
+                grantCreditTarget = null
+            }
+        )
+    }
+
+    // Reject Verification Request Dialog
+    rejectVerifTarget?.let { req ->
+        RejectVerificationDialog(
+            request = req,
+            isAr = isAr,
+            isSubmitting = isSubmitting,
+            onDismiss = { rejectVerifTarget = null },
+            onConfirm = { reason ->
+                onRejectVerification(req, reason)
+                rejectVerifTarget = null
             }
         )
     }
@@ -686,6 +752,7 @@ private fun MonetizationAdminTab(
     sponsoredAds: List<SponsoredAdItem>,
     adConfig: AdMobConfig,
     adStats: AdRevenueStats,
+    creditTransactions: List<CreditTransaction>,
     cloudinaryQuota: CloudinaryQuotaStatus,
     language: AppLanguage,
     strings: HatchStrings,
@@ -915,6 +982,140 @@ private fun MonetizationAdminTab(
                 }
             }
         }
+
+        if (creditTransactions.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(HatchSurfaceDark)
+                    .border(1.dp, HatchBorderDark, RoundedCornerShape(16.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
+                    Text(if (isAr) "سجل أرصدة التمييز" else "Boost Credit Ledger", color = HatchAmber400, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                }
+                creditTransactions.take(15).forEach { tx ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(HatchCardElevated)
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("${tx.type} • ${tx.uid.take(10)}…", color = HatchTextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            if (tx.reason.isNotBlank()) {
+                                Text(tx.reason, color = HatchTextMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        Text(
+                            text = if (tx.amount > 0) "+${tx.amount}" else "${tx.amount}",
+                            color = if (tx.amount > 0) HatchEmerald400 else HatchAmber400,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VerificationAdminTab(
+    requests: List<VerificationRequest>,
+    users: List<PublicUser>,
+    isAr: Boolean,
+    isSubmitting: Boolean,
+    onApprove: (VerificationRequest) -> Unit,
+    onRejectClick: (VerificationRequest) -> Unit
+) {
+    if (requests.isEmpty()) {
+        EmptyAdminSection(if (isAr) "لا توجد طلبات توثيق ذهبية حالياً" else "No verification requests yet")
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        requests.forEach { req ->
+            val isPending = req.status == "pending"
+            val userDeals = users.firstOrNull { it.uid == req.uid }?.dealsCompleted
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(HatchSurfaceDark)
+                    .border(
+                        width = 1.dp,
+                        color = if (isPending) HatchAmber500.copy(alpha = 0.6f) else HatchBorderDark,
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
+                        Text(req.userName, color = HatchTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                    Text(
+                        text = req.status.uppercase(Locale.ROOT),
+                        color = when (req.status) {
+                            "approved" -> HatchEmerald400
+                            "rejected" -> HatchRose500
+                            else -> HatchAmber400
+                        },
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black
+                    )
+                }
+                val cityShort = req.city.substringBefore(" (").trim()
+                val dealsSuffix = if (userDeals != null) " • $userDeals ${if (isAr) "صفقة" else "deals"}" else ""
+                Text(
+                    text = listOfNotNull(
+                        req.accountType.takeIf { it.isNotBlank() },
+                        cityShort.takeIf { it.isNotBlank() }
+                    ).joinToString(" • ") + dealsSuffix,
+                    color = HatchTextMuted,
+                    fontSize = 11.sp
+                )
+                if (req.note.isNotBlank()) {
+                    Text(req.note, color = HatchTextSecondary, fontSize = 12.sp)
+                }
+                if (!req.documentUrl.isNullOrBlank()) {
+                    Text(req.documentUrl, color = HatchAmber400, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (!req.rejectionReason.isNullOrBlank()) {
+                    Text("${if (isAr) "سبب الرفض:" else "Rejection:"} ${req.rejectionReason}", color = HatchRose500, fontSize = 11.sp)
+                }
+                if (isPending) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onApprove(req) },
+                            enabled = !isSubmitting,
+                            colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (isAr) "منح الشارة الذهبية ⭐" else "Approve Gold ⭐", fontSize = 11.sp, fontWeight = FontWeight.Black)
+                        }
+                        OutlinedButton(
+                            onClick = { onRejectClick(req) },
+                            enabled = !isSubmitting,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(if (isAr) "رفض الطلب" else "Reject", color = HatchRose500, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -924,6 +1125,8 @@ private fun UsersAdminTab(
     isAr: Boolean,
     onSuspendClick: (PublicUser) -> Unit,
     onUnsuspendClick: (String) -> Unit,
+    onToggleVerified: (PublicUser) -> Unit,
+    onGrantCreditClick: (PublicUser) -> Unit,
     onDeleteClick: (PublicUser) -> Unit
 ) {
     var search by remember { mutableStateOf("") }
@@ -933,7 +1136,7 @@ private fun UsersAdminTab(
         users.filter { u ->
             val q = search.trim().lowercase(Locale.ROOT)
             val matchesQ = q.isBlank() || u.name.lowercase(Locale.ROOT).contains(q) || u.city.lowercase(Locale.ROOT).contains(q)
-            val suspended = MarketplaceLogic.isUserSuspended(u.status, u.suspendedUntil)
+            val suspended = MarketplaceLogic.isUserSuspended(u.status, u.suspendedUntil, u.suspendedUntilTs)
             val matchesFilter = when (filterMode) {
                 "active" -> !suspended
                 "suspended" -> suspended
@@ -958,7 +1161,7 @@ private fun UsersAdminTab(
         }
 
         filtered.forEach { u ->
-            val suspended = MarketplaceLogic.isUserSuspended(u.status, u.suspendedUntil)
+            val suspended = MarketplaceLogic.isUserSuspended(u.status, u.suspendedUntil, u.suspendedUntilTs)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -976,7 +1179,12 @@ private fun UsersAdminTab(
                         modifier = Modifier.size(42.dp).clip(CircleShape).background(HatchCardElevated)
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(u.name, color = HatchTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(u.name, color = HatchTextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            if (u.verifiedIdentity) {
+                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(14.dp))
+                            }
+                        }
                         Text("${u.city} • ${u.dealsCompleted} ${if (isAr) "صفقة" else "deals"} • ${u.reportsCount} ${if (isAr) "بلاغ" else "reports"}", color = HatchTextMuted, fontSize = 11.sp)
                     }
                     Text(
@@ -986,21 +1194,37 @@ private fun UsersAdminTab(
                         fontWeight = FontWeight.Black
                     )
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     if (suspended) {
                         Button(
                             onClick = { onUnsuspendClick(u.uid) },
-                            colors = ButtonDefaults.buttonColors(containerColor = HatchEmerald500, contentColor = Color.White),
-                            modifier = Modifier.weight(1f)
+                            colors = ButtonDefaults.buttonColors(containerColor = HatchEmerald500, contentColor = Color.White)
                         ) {
                             Text(if (isAr) "فك الإيقاف" else "Unsuspend", fontSize = 11.sp, fontWeight = FontWeight.Black)
                         }
                     } else {
-                        OutlinedButton(onClick = { onSuspendClick(u) }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { onSuspendClick(u) }) {
                             Icon(Icons.Rounded.Block, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(14.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(if (isAr) "إيقاف مؤقت" else "Suspend", color = HatchAmber400, fontSize = 11.sp)
                         }
+                    }
+                    OutlinedButton(onClick = { onToggleVerified(u) }) {
+                        Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (u.verifiedIdentity) (if (isAr) "سحب التوثيق" else "Revoke Gold") else (if (isAr) "توثيق ذهبي" else "Verify Gold"),
+                            color = HatchAmber400,
+                            fontSize = 11.sp
+                        )
+                    }
+                    OutlinedButton(onClick = { onGrantCreditClick(u) }) {
+                        Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (isAr) "+ رصيد تمييز" else "+ Credit", color = HatchEmerald400, fontSize = 11.sp)
                     }
                     OutlinedButton(onClick = { onDeleteClick(u) }) {
                         Icon(Icons.Rounded.Delete, contentDescription = null, tint = HatchRose500, modifier = Modifier.size(14.dp))
@@ -1009,6 +1233,111 @@ private fun UsersAdminTab(
             }
         }
     }
+}
+
+@Composable
+private fun GrantCreditAdminDialog(
+    target: PublicUser,
+    isAr: Boolean,
+    isSubmitting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (amount: Int, reason: String) -> Unit
+) {
+    var amountText by remember { mutableStateOf("1") }
+    var reason by remember { mutableStateOf(if (isAr) "مكافأة دعم من إدارة هتش" else "Admin boost credit grant") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = HatchSurfaceDark,
+        title = {
+            Text(
+                text = if (isAr) "منح رصيد تمييز: ${target.name}" else "Grant Credits: ${target.name}",
+                color = HatchAmber400,
+                fontWeight = FontWeight.Black,
+                fontSize = 15.sp
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(1, 3, 5, 10).forEach { amt ->
+                        SelectablePill("+$amt", amountText == amt.toString()) { amountText = amt.toString() }
+                    }
+                }
+                HatchField(
+                    value = amountText,
+                    onValueChange = { amountText = it.filter { c -> c.isDigit() } },
+                    label = if (isAr) "الكمية (1 - 20)" else "Amount (1 - 20)",
+                    keyboardType = KeyboardType.Number
+                )
+                HatchField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = if (isAr) "السبب *" else "Reason *"
+                )
+            }
+        },
+        confirmButton = {
+            val amt = (amountText.toIntOrNull() ?: 0).coerceIn(1, 20)
+            Button(
+                onClick = { onConfirm(amt, reason.trim()) },
+                enabled = !isSubmitting && reason.trim().length >= 3,
+                colors = ButtonDefaults.buttonColors(containerColor = HatchEmerald500, contentColor = Color.White)
+            ) {
+                Text(if (isAr) "منح +$amt" else "Grant +$amt", fontWeight = FontWeight.Black)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(if (isAr) "إلغاء" else "Cancel", color = HatchTextMuted) }
+        }
+    )
+}
+
+@Composable
+private fun RejectVerificationDialog(
+    request: VerificationRequest,
+    isAr: Boolean,
+    isSubmitting: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var reason by remember {
+        mutableStateOf(
+            if (isAr) "يرجى إرفاق مستند أو رابط أوضح لإتمام مراجعة التوثيق." else "Please provide clearer verification details."
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = HatchSurfaceDark,
+        title = {
+            Text(
+                text = if (isAr) "رفض طلب توثيق: ${request.userName}" else "Reject Verification: ${request.userName}",
+                color = HatchRose500,
+                fontWeight = FontWeight.Black,
+                fontSize = 15.sp
+            )
+        },
+        text = {
+            HatchField(
+                value = reason,
+                onValueChange = { reason = it },
+                label = if (isAr) "سبب الرفض *" else "Rejection Reason *",
+                singleLine = false,
+                minLines = 2
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(reason.trim()) },
+                enabled = !isSubmitting && reason.trim().length >= 4,
+                colors = ButtonDefaults.buttonColors(containerColor = HatchRose500, contentColor = Color.White)
+            ) { Text(if (isAr) "تأكيد الرفض" else "Confirm Reject", fontWeight = FontWeight.Black) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(if (isAr) "إلغاء" else "Cancel", color = HatchTextMuted) }
+        }
+    )
 }
 
 @Composable

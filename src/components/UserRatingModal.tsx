@@ -125,10 +125,10 @@ export const UserRatingModal: React.FC = () => {
               />
               {seller.sellerVerified && (
                 <div 
-                  className="absolute -bottom-1 -right-1 bg-neutral-950 rounded-full p-0.5 text-emerald-400"
+                  className="absolute -bottom-1 -right-1 bg-neutral-950 rounded-full p-0.5 text-amber-400"
                   title={t.verifiedSeller}
                 >
-                  <ShieldCheck className="w-4 h-4 fill-emerald-500/20" />
+                  <ShieldCheck className="w-4 h-4 fill-amber-500/20" />
                 </div>
               )}
             </div>
@@ -139,8 +139,8 @@ export const UserRatingModal: React.FC = () => {
                   {seller.sellerName}
                 </h3>
                 {seller.sellerVerified && (
-                  <span className="text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                    {language === 'ar' ? 'بائع موثق ✓' : 'Verified ✓'}
+                  <span className="text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                    {language === 'ar' ? 'بائع موثق ✓' : 'Gold Verified ✓'}
                   </span>
                 )}
               </div>

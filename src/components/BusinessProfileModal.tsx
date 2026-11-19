@@ -40,9 +40,7 @@ export const BusinessProfileModal: React.FC = () => {
   const isCompany = accountType === 'company';
   const logo = seller.businessLogo || seller.avatar;
   const isOwnPage = currentUser.id === seller.id;
-  const isVerified =
-    seller.verifiedIdentity ||
-    (seller.dealsCompleted >= 10 && (!seller.reportsCount || seller.reportsCount === 0));
+  const isVerified = Boolean(seller.verifiedIdentity);
 
   const handleCall = () => {
     window.location.href = `tel:${seller.phone}`;
@@ -65,7 +63,7 @@ export const BusinessProfileModal: React.FC = () => {
                 />
                 {isVerified && (
                   <div
-                    className="absolute -bottom-1.5 -end-1.5 bg-emerald-500 text-white p-1 rounded-full border-2 border-neutral-900 shadow-md"
+                    className="absolute -bottom-1.5 -end-1.5 bg-amber-500 text-neutral-950 p-1 rounded-full border-2 border-neutral-900 shadow-md"
                     title={t.verifiedSeller}
                   >
                     <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
@@ -96,10 +94,10 @@ export const BusinessProfileModal: React.FC = () => {
                   </span>
 
                   {isVerified && (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 px-2.5 py-0.5 rounded-full">
-                      <ShieldCheck className="w-3.5 h-3.5" />
+                    <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/40 px-2.5 py-0.5 rounded-full">
+                      <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
                       <span>
-                        {language === 'ar' ? 'حساب موثق ✓' : 'Verified ✓'}
+                        {language === 'ar' ? 'حساب موثق ✓' : 'Gold Verified ✓'}
                       </span>
                     </span>
                   )}

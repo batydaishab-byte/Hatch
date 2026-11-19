@@ -8,17 +8,20 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
 import com.hatch.marketplace.data.model.AccountType
+import com.hatch.marketplace.data.model.HatchFormatters
 import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.PrivateUser
 import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.UserStatus
+import com.hatch.marketplace.data.model.VerificationRequest
 import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -27,7 +30,8 @@ data class AuthSessionState(
     val publicProfile: PublicUser? = null,
     val privateProfile: PrivateUser? = null,
     val isAdmin: Boolean = false,
-    val isVerifiedAdminEmail: Boolean = false,
+    val hasAdminClaim: Boolean = false,
+    val hasAdminDoc: Boolean = false,
     val needsProfileOnboarding: Boolean = false,
     val isFirebaseConnected: Boolean = false
 )
@@ -61,6 +65,7 @@ class AuthRepository @Inject constructor(
 
         var currentPublic: PublicUser? = null
         var currentPrivate: PrivateUser? = null
+        var hasAdminClaim = false
         var hasAdminDoc = false
         var publicLoaded = false
 
@@ -69,10 +74,10 @@ class AuthRepository @Inject constructor(
                 trySend(AuthSessionState(isFirebaseConnected = db != null))
                 return
             }
-            val verifiedEmail = user.isEmailVerified &&
-                user.email?.trim()?.equals("batydaishab@gmail.com", ignoreCase = true) == true
-            val isAdmin = hasAdminDoc || verifiedEmail ||
-                MarketplaceLogic.isAdminRole(currentPrivate?.role, if (user.isEmailVerified) user.email else null)
+            val verifiedEmail = user.isEmailVerified
+            val effectiveClaim = verifiedEmail && hasAdminClaim
+            val effectiveDoc = verifiedEmail && hasAdminDoc
+            val isAdmin = MarketplaceLogic.isAdminRole(hasAdminClaim = effectiveClaim, hasAdminDoc = effectiveDoc)
             val needsOnboarding = publicLoaded && (
                 currentPublic == null ||
                     currentPublic?.name.isNullOrBlank() ||
@@ -84,7 +89,8 @@ class AuthRepository @Inject constructor(
                     publicProfile = currentPublic,
                     privateProfile = currentPrivate,
                     isAdmin = isAdmin,
-                    isVerifiedAdminEmail = verifiedEmail,
+                    hasAdminClaim = effectiveClaim,
+                    hasAdminDoc = effectiveDoc,
                     needsProfileOnboarding = needsOnboarding,
                     isFirebaseConnected = db != null
                 )
@@ -97,6 +103,7 @@ class AuthRepository @Inject constructor(
             adminReg?.remove(); adminReg = null
             currentPublic = null
             currentPrivate = null
+            hasAdminClaim = false
             hasAdminDoc = false
             publicLoaded = false
 
@@ -111,6 +118,15 @@ class AuthRepository @Inject constructor(
             }
 
             emitState(user)
+
+            user.getIdToken(false).addOnSuccessListener { tokenResult ->
+                if (firebaseAuth.currentUser?.uid == user.uid) {
+                    hasAdminClaim = user.isEmailVerified && (tokenResult.claims["admin"] == true)
+                    emitState(user)
+                }
+            }.addOnFailureListener { e ->
+                Log.w("HatchAuthFlow", "getIdToken failed: ${e.javaClass.simpleName}")
+            }
 
             if (db == null) {
                 Log.e("HatchAuthFlow", "Firestore unavailable during auth session observation")
@@ -406,14 +422,14 @@ class AuthRepository @Inject constructor(
             )
         ).await()
 
-        // Propagate updated store/company identity onto existing non-sold products under the same UID
+        // Propagate updated store/company identity onto active products under the same UID
         runCatching {
             val sellerProducts = db.collection("products")
                 .whereEqualTo("sellerId", uid)
+                .whereEqualTo("status", ProductStatus.ACTIVE.wireValue)
                 .get()
                 .await()
                 .documents
-                .filter { it.getString("status") != ProductStatus.SOLD.wireValue }
 
             sellerProducts.chunked(400).forEach { chunk ->
                 val batch = db.batch()
@@ -527,27 +543,213 @@ class AuthRepository @Inject constructor(
         }
     }
 
-    suspend fun adjustRewardCredits(uid: String, delta: Int): Result<Int> = runCatching {
-        require(delta == 1 || delta == -1) { "Reward credit adjustment must be +1 or -1." }
+    suspend fun grantRewardCredit(uid: String, amount: Int, reason: String): Result<Int> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val adminUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(amount in 1..100) { "Grant amount must be between 1 and 100." }
+        val cleanReason = reason.trim().ifBlank { "منح رصيد تمييز من إدارة هتش" }.take(240)
         val privateRef = db.collection("users_private").document(uid)
-        db.runTransaction { tx ->
+        val txId = HatchFormatters.sanitizeFirestoreId("ctx_${UUID.randomUUID().toString().replace("-", "").take(16)}")
+        val txRef = db.collection("credit_transactions").document(txId)
+
+        val nextBalance = db.runTransaction { tx ->
             val snap = tx.get(privateRef)
+            require(snap.exists()) { "User private profile not found." }
             val current = (snap.getLong("rewardCredits") ?: 0L).toInt()
-            val next = (current + delta).coerceIn(0, 1000)
-            require(!(delta < 0 && current <= 0)) { "Insufficient reward credits." }
+            val next = current + amount
+            require(next <= 1000) { "Reward credit balance cannot exceed 1000." }
             tx.update(
                 privateRef,
                 mapOf(
                     "rewardCredits" to next,
+                    "lastCreditTxId" to txId,
                     "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            tx.set(
+                txRef,
+                hashMapOf<String, Any>(
+                    "id" to txId,
+                    "uid" to uid,
+                    "type" to "admin_grant",
+                    "amount" to amount,
+                    "balanceBefore" to current,
+                    "balanceAfter" to next,
+                    "grantedBy" to adminUid,
+                    "reason" to cleanReason,
+                    "createdAt" to FieldValue.serverTimestamp()
                 )
             )
             next
         }.await()
+
+        runCatching {
+            val notifId = HatchFormatters.sanitizeFirestoreId("cred_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+            db.collection("users_private").document(uid)
+                .collection("notifications").document(notifId)
+                .set(
+                    hashMapOf<String, Any>(
+                        "id" to notifId,
+                        "type" to "system",
+                        "titleAr" to "تم منحك +$amount رصيد تمييز من الإدارة ✨",
+                        "titleEn" to "Admin granted you +$amount boost credits ✨",
+                        "bodyAr" to cleanReason,
+                        "bodyEn" to cleanReason,
+                        "read" to false,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+        }
+        nextBalance
     }
 
-    fun observePublicUsers(isSignedIn: Boolean, isVerifiedAdminEmail: Boolean): Flow<List<PublicUser>> = callbackFlow {
+    suspend fun approveVerificationRequest(request: VerificationRequest): Result<Unit> = runCatching {
+        val db = clients.firestore ?: error("Firestore unavailable")
+        val adminUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        db.collection("verification_requests").document(request.id).update(
+            mapOf(
+                "status" to "approved",
+                "reviewedBy" to adminUid,
+                "reviewedAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+        setUserVerificationStatus(uid = request.uid, verified = true, reason = "").getOrThrow()
+    }
+
+    suspend fun rejectVerificationRequest(request: VerificationRequest, rejectionReason: String): Result<Unit> = runCatching {
+        val db = clients.firestore ?: error("Firestore unavailable")
+        val adminUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        val cleanReason = rejectionReason.trim().ifBlank { "لم تستوفِ البيانات شروط التوثيق الحالية" }.take(400)
+        db.collection("verification_requests").document(request.id).update(
+            mapOf(
+                "status" to "rejected",
+                "reviewedBy" to adminUid,
+                "rejectionReason" to cleanReason,
+                "reviewedAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+
+        runCatching {
+            val notifId = HatchFormatters.sanitizeFirestoreId("ver_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+            db.collection("users_private").document(request.uid)
+                .collection("notifications").document(notifId)
+                .set(
+                    hashMapOf<String, Any>(
+                        "id" to notifId,
+                        "type" to "verification",
+                        "titleAr" to "تحديث حول طلب شارة التوثيق الذهبية",
+                        "titleEn" to "Gold Verification Request Update",
+                        "bodyAr" to "تعذر اعتماد الطلب حالياً: $cleanReason",
+                        "bodyEn" to "Request not approved yet: $cleanReason",
+                        "read" to false,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+        }
+    }
+
+    suspend fun setUserVerificationStatus(uid: String, verified: Boolean, reason: String = ""): Result<Unit> = runCatching {
+        val db = clients.firestore ?: error("Firestore unavailable")
+        val adminUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        db.collection("users_public").document(uid).update(
+            mapOf(
+                "verifiedIdentity" to verified,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+        ).await()
+
+        runCatching {
+            val commercialRef = db.collection("commercial_profiles").document(uid)
+            if (commercialRef.get().await().exists()) {
+                commercialRef.update(
+                    mapOf(
+                        "verifiedIdentity" to verified,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        }
+
+        runCatching {
+            val sellerProducts = db.collection("products")
+                .whereEqualTo("sellerId", uid)
+                .whereEqualTo("status", ProductStatus.ACTIVE.wireValue)
+                .get()
+                .await()
+                .documents
+            sellerProducts.chunked(400).forEach { chunk ->
+                val batch = db.batch()
+                chunk.forEach { doc ->
+                    batch.update(
+                        doc.reference,
+                        mapOf(
+                            "sellerVerified" to verified,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                }
+                batch.commit().await()
+            }
+        }
+
+        if (!verified) {
+            runCatching {
+                val approvedReqs = db.collection("verification_requests")
+                    .whereEqualTo("uid", uid)
+                    .whereEqualTo("status", "approved")
+                    .get()
+                    .await()
+                    .documents
+                approvedReqs.forEach { doc ->
+                    val revokeUpdates = hashMapOf<String, Any>(
+                        "status" to "revoked",
+                        "reviewedBy" to adminUid,
+                        "reviewedAt" to FieldValue.serverTimestamp(),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (reason.isNotBlank()) {
+                        revokeUpdates["rejectionReason"] = reason.trim().take(400)
+                    }
+                    doc.reference.update(revokeUpdates).await()
+                }
+            }
+        }
+
+        runCatching {
+            val notifId = HatchFormatters.sanitizeFirestoreId("ver_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+            val notifPayload = if (verified) {
+                hashMapOf<String, Any>(
+                    "id" to notifId,
+                    "type" to "verification",
+                    "titleAr" to "تهانينا! تم منح حسابك شارة التوثيق الذهبية ⭐",
+                    "titleEn" to "Congratulations! Gold Verified Badge Granted ⭐",
+                    "bodyAr" to "تمت مراجعة حسابك واعتماد التوثيق الرسمي من إدارة هتش.",
+                    "bodyEn" to "Your account has been verified with the official Gold Badge by HATCH Administration.",
+                    "read" to false,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            } else {
+                val cleanReason = reason.trim().ifBlank { "مراجعة إدارية" }.take(300)
+                hashMapOf<String, Any>(
+                    "id" to notifId,
+                    "type" to "verification",
+                    "titleAr" to "تم سحب شارة التوثيق الذهبية",
+                    "titleEn" to "Gold Verification Badge Revoked",
+                    "bodyAr" to "قامت الإدارة بسحب شارة التوثيق: $cleanReason",
+                    "bodyEn" to "HATCH Administration revoked your verified badge: $cleanReason",
+                    "read" to false,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            }
+            db.collection("users_private").document(uid)
+                .collection("notifications").document(notifId)
+                .set(notifPayload).await()
+        }
+    }
+
+    fun observePublicUsers(isSignedIn: Boolean, hasAdminClaim: Boolean): Flow<List<PublicUser>> = callbackFlow {
         val db = clients.firestore
         if (db == null || !isSignedIn) {
             trySend(emptyList())
@@ -555,7 +757,7 @@ class AuthRepository @Inject constructor(
             return@callbackFlow
         }
 
-        val query = if (isVerifiedAdminEmail) {
+        val query = if (hasAdminClaim) {
             db.collection("users_public")
         } else {
             db.collection("users_public").whereEqualTo("status", UserStatus.ACTIVE.wireValue)
@@ -570,7 +772,7 @@ class AuthRepository @Inject constructor(
         awaitClose { reg.remove() }
     }
 
-    fun observeCommercialProfiles(isVerifiedAdminEmail: Boolean): Flow<List<PublicUser>> = callbackFlow {
+    fun observeCommercialProfiles(hasAdminClaim: Boolean): Flow<List<PublicUser>> = callbackFlow {
         val db = clients.firestore
         if (db == null) {
             trySend(emptyList())
@@ -578,7 +780,7 @@ class AuthRepository @Inject constructor(
             return@callbackFlow
         }
 
-        val query = if (isVerifiedAdminEmail) {
+        val query = if (hasAdminClaim) {
             db.collection("commercial_profiles")
         } else {
             db.collection("commercial_profiles")
@@ -594,7 +796,7 @@ class AuthRepository @Inject constructor(
             }
             val list = snap?.documents?.mapNotNull { doc ->
                 val raw = doc.toObject(PublicUser::class.java)?.copy(uid = doc.id) ?: return@mapNotNull null
-                if (isVerifiedAdminEmail) raw else MarketplaceLogic.sanitizeCommercialProfileForGuest(raw)
+                if (hasAdminClaim) raw else MarketplaceLogic.sanitizeCommercialProfileForGuest(raw)
             }.orEmpty()
             trySend(list)
         }

@@ -29,7 +29,8 @@ export const Header: React.FC = () => {
     setIsSafetyModalOpen,
     setIsApkModalOpen,
     setActiveTab,
-    activeTab
+    activeTab,
+    isAdmin
   } = useApp();
 
   const cities: (SudaneseCity | 'all')[] = [
@@ -155,7 +156,7 @@ export const Header: React.FC = () => {
               <span className="text-xs font-medium max-w-[80px] sm:max-w-[100px] truncate hidden sm:inline">
                 {currentUser.name}
               </span>
-              {currentUser.role === 'admin' && (
+              {isAdmin && (
                 <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-mono font-bold">
                   ADMIN
                 </span>

@@ -195,9 +195,9 @@ fun AdMobRewardedModal(
                             Icon(Icons.Rounded.CardGiftcard, contentDescription = null, tint = HatchEmerald400)
                             Text(
                                 text = if (remaining > 0) {
-                                    if (language == AppLanguage.AR) "المكافأة بعد $remaining ثانية" else "Reward in ${remaining}s"
+                                    if (language == AppLanguage.AR) "إعلان مموّل • $remaining ثانية" else "Sponsored Ad • ${remaining}s"
                                 } else {
-                                    if (language == AppLanguage.AR) "اكتملت المكافأة! 🎉" else "Reward Unlocked! 🎉"
+                                    if (language == AppLanguage.AR) "اكتملت المشاهدة ✨" else "Viewing Complete ✨"
                                 },
                                 color = HatchEmerald400,
                                 fontWeight = FontWeight.Black,
@@ -252,7 +252,7 @@ fun AdMobRewardedModal(
                 ) {
                     Text(
                         text = if (remaining == 0) {
-                            if (language == AppLanguage.AR) "استلام +1 رصيد تمييز 🎉" else "Claim +1 Boost Credit 🎉"
+                            if (language == AppLanguage.AR) "إغلاق ومواصلة التصفح ✓" else "Continue Browsing ✓"
                         } else {
                             if (language == AppLanguage.AR) "انتظر انتهاء الإعلان..." else "Please wait..."
                         },
@@ -267,17 +267,17 @@ fun AdMobRewardedModal(
         AlertDialog(
             onDismissRequest = { showForfeitWarning = false },
             containerColor = HatchSurfaceDark,
-            title = { Text(if (language == AppLanguage.AR) "إلغاء المكافأة؟" else "Forfeit Reward?", color = HatchAmber400, fontWeight = FontWeight.Bold) },
+            title = { Text(if (language == AppLanguage.AR) "إغلاق الإعلان؟" else "Close Ad?", color = HatchAmber400, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    text = if (language == AppLanguage.AR) "إذا أغلقت الإعلان الآن فلن تحصل على رصيد التمييز المجاني." else "Closing now will forfeit your +1 free boost credit.",
+                    text = if (language == AppLanguage.AR) "يمكنك متابعة المشاهدة أو إغلاق العرض والعودة للتصفح." else "You can continue watching or exit back to browsing.",
                     color = HatchTextSecondary,
                     fontSize = 13.sp
                 )
             },
             confirmButton = {
                 TextButton(onClick = { showForfeitWarning = false; onForfeitDismiss() }) {
-                    Text(if (language == AppLanguage.AR) "إغلاق على أي حال" else "Exit Anyway", color = HatchTextMuted)
+                    Text(if (language == AppLanguage.AR) "إغلاق" else "Exit", color = HatchTextMuted)
                 }
             },
             dismissButton = {

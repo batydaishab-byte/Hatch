@@ -12,7 +12,7 @@ import { useApp } from '../context/AppContext';
 import { ActiveTab } from '../types';
 
 export const BottomNav: React.FC = () => {
-  const { activeTab, setActiveTab, t, unreadMessagesCount, setIsSellModalOpen, currentUser, setActiveConversationId } = useApp();
+  const { activeTab, setActiveTab, t, unreadMessagesCount, setIsSellModalOpen, isAdmin, setActiveConversationId } = useApp();
 
   const navItems: { tab: ActiveTab; label: string; icon: React.ReactNode; isAction?: boolean }[] = [
     {
@@ -57,7 +57,7 @@ export const BottomNav: React.FC = () => {
     },
   ];
 
-  if (currentUser.role === 'admin') {
+  if (isAdmin) {
     navItems.push({
       tab: 'admin',
       label: t.tabAdmin,

@@ -34,7 +34,7 @@ export const AdminConversationModal: React.FC<AdminConversationModalProps> = ({
     products, 
     adminDeleteProduct, 
     adminResolveReport,
-    flagProduct,
+    adminFlagProduct,
     showToast, 
     t, 
     language 
@@ -49,7 +49,7 @@ export const AdminConversationModal: React.FC<AdminConversationModalProps> = ({
       adminResolveReport(report.id, 'resolved');
     }
     if (conversation.productId) {
-      flagProduct(conversation.productId, 'تم تأكيد المخالفة بعد مراجعة سجل المحادثة');
+      adminFlagProduct(conversation.productId, 'تم تأكيد المخالفة بعد مراجعة سجل المحادثة');
     }
     showToast(
       language === 'ar' 

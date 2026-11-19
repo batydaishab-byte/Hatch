@@ -49,7 +49,7 @@ export const NotificationsModal: React.FC = () => {
       case 'price_drop':
         return <TrendingDown className="w-4 h-4 text-emerald-400" />;
       case 'verification':
-        return <ShieldCheck className="w-4 h-4 text-emerald-400" />;
+        return <ShieldCheck className="w-4 h-4 text-amber-400" />;
       case 'system':
       default:
         return <Megaphone className="w-4 h-4 text-amber-400" />;
@@ -65,7 +65,7 @@ export const NotificationsModal: React.FC = () => {
       case 'update':
         return <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">{language === 'ar' ? 'مستجدات' : 'Update'}</span>;
       case 'verification':
-        return <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{language === 'ar' ? 'توثيق' : 'Verified'}</span>;
+        return <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30">{language === 'ar' ? 'توثيق ذهبي' : 'Gold Verified'}</span>;
       case 'price_drop':
         return <span className="text-[9px] font-bold px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">{language === 'ar' ? 'تخفيض' : 'Price Drop'}</span>;
       default:

@@ -1,5 +1,16 @@
 {
   "entities": {
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Server-protected administrator registry entry (created via Firebase Console or Admin SDK)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["admin"] },
+        "grantedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role"]
+    },
     "PublicUser": {
       "title": "PublicUser",
       "description": "Public non-PII user profile shared across Web and Android Native clients",
@@ -15,8 +26,10 @@
         "verifiedIdentity": { "type": "boolean" },
         "status": { "type": "string", "enum": ["active", "suspended"] },
         "suspendedUntil": { "type": "string", "maxLength": 64 },
+        "suspendedUntilTs": { "type": "string", "format": "date-time" },
         "suspensionDays": { "type": "integer" },
         "suspensionReason": { "type": "string", "maxLength": 500 },
+        "lastSoldProductId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "accountType": { "type": "string", "enum": ["personal", "store", "company"], "description": "Account category (missing treated as personal)" },
         "businessActivity": { "type": "string", "minLength": 0, "maxLength": 120, "description": "Store activity type or company business field" },
         "businessLogo": { "type": "string", "minLength": 0, "maxLength": 1000, "description": "Store or company logo URL" },
@@ -39,6 +52,7 @@
         "reportsCount": { "type": "integer" },
         "verifiedIdentity": { "type": "boolean" },
         "status": { "type": "string", "enum": ["active", "suspended"] },
+        "lastSoldProductId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "accountType": { "type": "string", "enum": ["store", "company"] },
         "businessActivity": { "type": "string", "minLength": 0, "maxLength": 120 },
         "businessLogo": { "type": "string", "minLength": 0, "maxLength": 1000 },
@@ -49,7 +63,7 @@
     },
     "PrivateUser": {
       "title": "PrivateUser",
-      "description": "Isolated PII and RBAC metadata accessible only to the account owner or verified admins",
+      "description": "Isolated PII and credit balance metadata accessible only to the account owner or verified admins",
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -57,11 +71,52 @@
         "phone": { "type": "string", "minLength": 6, "maxLength": 32 },
         "role": { "type": "string", "enum": ["user", "admin"] },
         "rewardCredits": { "type": "integer" },
+        "lastCreditTxId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "fcmTokens": { "type": "array", "description": "Bounded up to 5 device tokens" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "phone", "role", "rewardCredits", "createdAt", "updatedAt"]
+    },
+    "VerificationRequest": {
+      "title": "VerificationRequest",
+      "description": "Admin-reviewed account verification requests submitted by users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "userAvatar": { "type": "string", "minLength": 0, "maxLength": 1000 },
+        "accountType": { "type": "string", "enum": ["personal", "store", "company"] },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "note": { "type": "string", "minLength": 5, "maxLength": 600 },
+        "documentUrl": { "type": "string", "minLength": 0, "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "revoked"] },
+        "reviewedBy": { "type": "string", "maxLength": 128 },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "reviewedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "userName", "accountType", "city", "note", "status", "createdAt", "updatedAt"]
+    },
+    "CreditTransaction": {
+      "title": "CreditTransaction",
+      "description": "Immutable reward credit grant and listing boost spend audit ledger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["admin_grant", "system_reward", "ad_boost_spend"] },
+        "amount": { "type": "integer" },
+        "balanceBefore": { "type": "integer" },
+        "balanceAfter": { "type": "integer" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "grantedBy": { "type": "string", "maxLength": 128 },
+        "reason": { "type": "string", "minLength": 2, "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "uid", "type", "amount", "balanceBefore", "balanceAfter", "reason", "createdAt"]
     },
     "Product": {
       "title": "Product",
@@ -98,6 +153,7 @@
         "deliveryAvailable": { "type": "boolean" },
         "urgentSale": { "type": "boolean" },
         "featured": { "type": "boolean" },
+        "featuredTxId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "viewsCount": { "type": "integer" },
         "likesCount": { "type": "integer" },
         "status": { "type": "string", "enum": ["active", "sold", "under_review", "flagged"] },
@@ -108,7 +164,7 @@
     },
     "Conversation": {
       "title": "Conversation",
-      "description": "Negotiation thread between buyer and seller tied to a specific product",
+      "description": "Negotiation thread between buyer and seller tied to a specific product with strict offer state machine",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -129,6 +185,10 @@
         "offerAmount": { "type": "number" },
         "counterAmount": { "type": "number" },
         "offerStatus": { "type": "string", "enum": ["none", "pending", "accepted", "declined", "countered"] },
+        "offerUpdatedBy": { "type": "string", "maxLength": 128 },
+        "acceptedBy": { "type": "string", "maxLength": 128 },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "offerHistory": { "type": "array", "description": "Bounded audit log (<= 30 entries) of offer transitions" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -174,9 +234,19 @@
       },
       "required": ["productId", "createdAt"]
     },
+    "UserViewedProduct": {
+      "title": "UserViewedProduct",
+      "description": "Immutable per-user unique product view receipt used to atomically increment viewsCount once per user",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "createdAt"]
+    },
     "UserReview": {
       "title": "UserReview",
-      "description": "Buyer/seller rating and review",
+      "description": "Verified buyer/seller rating and review bound to a completed accepted deal",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -187,15 +257,16 @@
         "rating": { "type": "integer" },
         "comment": { "type": "string", "maxLength": 600 },
         "tags": { "type": "array", "description": "Up to 6 review tags" },
-        "productId": { "type": "string", "maxLength": 128 },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "conversationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "productTitle": { "type": "string", "maxLength": 140 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "sellerId", "reviewerId", "rating", "comment", "createdAt"]
+      "required": ["id", "sellerId", "reviewerId", "productId", "conversationId", "rating", "comment", "createdAt"]
     },
     "ReportTicket": {
       "title": "ReportTicket",
-      "description": "Violation or scam report submitted to HATCH admin moderation",
+      "description": "Violation or scam report submitted to HATCH admin moderation (never disables listings automatically)",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -215,7 +286,7 @@
     },
     "NotificationItem": {
       "title": "NotificationItem",
-      "description": "User notification or admin suspension/broadcast alert",
+      "description": "User notification or admin suspension/verification/broadcast alert",
       "type": "object",
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -302,6 +373,10 @@
     }
   },
   "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Admin authorization registry restricted exclusively to verified admins"
+    },
     "/users_public/{userId}": {
       "schema": { "$ref": "#/entities/PublicUser" },
       "description": "Public profile attributes safe for display in marketplace listings and chat"
@@ -312,7 +387,7 @@
     },
     "/users_private/{userId}": {
       "schema": { "$ref": "#/entities/PrivateUser" },
-      "description": "Isolated PII (email, phone) and RBAC role accessible only to owner or admin"
+      "description": "Isolated PII (email, phone) and reward credits accessible only to owner or admin"
     },
     "/users_private/{userId}/swipes/{productId}": {
       "schema": { "$ref": "#/entities/UserSwipe" },
@@ -322,9 +397,21 @@
       "schema": { "$ref": "#/entities/UserFavorite" },
       "description": "Per-user saved favorite listings"
     },
+    "/users_private/{userId}/viewed_products/{productId}": {
+      "schema": { "$ref": "#/entities/UserViewedProduct" },
+      "description": "Immutable per-user product view receipts for unique viewsCount enforcement"
+    },
     "/users_private/{userId}/notifications/{notificationId}": {
       "schema": { "$ref": "#/entities/NotificationItem" },
-      "description": "User-targeted notifications including offers and admin suspension notices"
+      "description": "User-targeted notifications including offers, verification updates, and suspension notices"
+    },
+    "/verification_requests/{requestId}": {
+      "schema": { "$ref": "#/entities/VerificationRequest" },
+      "description": "User verification applications reviewed strictly by verified Admins"
+    },
+    "/credit_transactions/{txId}": {
+      "schema": { "$ref": "#/entities/CreditTransaction" },
+      "description": "Immutable ledger of admin reward grants and atomic listing boost redemptions"
     },
     "/products/{productId}": {
       "schema": { "$ref": "#/entities/Product" },
@@ -332,7 +419,7 @@
     },
     "/conversations/{conversationId}": {
       "schema": { "$ref": "#/entities/Conversation" },
-      "description": "Buyer-seller negotiation threads and offer status"
+      "description": "Buyer-seller negotiation threads and strict offer state machine"
     },
     "/conversations/{conversationId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChatMessage" },

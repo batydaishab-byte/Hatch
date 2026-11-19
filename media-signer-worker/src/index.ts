@@ -3,7 +3,7 @@
  *
  * Security Guarantees:
  * 1. Verifies Firebase Auth ID Token signature (RS256) against Google's public JWKs.
- * 2. Verifies Admin identity AT UPLOAD SIGNING TIME (email_verified === true && email === ADMIN_EMAIL).
+ * 2. Verifies Admin identity AT UPLOAD SIGNING TIME via Firebase Custom Claims (email_verified === true && admin === true).
  * 3. Regular users can ONLY sign compressed WebP product images (<= 1.5 MB).
  * 4. Admins ONLY can sign sponsored ad images (<= 2 MB) & videos (<= 15 MB, <= 30s).
  * 5. Keeps CLOUDINARY_API_SECRET strictly inside Cloudflare Worker encrypted Secrets.
@@ -11,7 +11,6 @@
 
 export interface Env {
   FIREBASE_PROJECT_ID: string;
-  ADMIN_EMAIL: string;
   CLOUDINARY_CLOUD_NAME: string;
   CLOUDINARY_API_KEY: string;
   CLOUDINARY_API_SECRET: string;
@@ -25,6 +24,7 @@ interface FirebaseJwtPayload {
   iat: number;
   email?: string;
   email_verified?: boolean;
+  admin?: boolean;
 }
 
 const GOOGLE_JWKS_URL =
@@ -49,7 +49,7 @@ export default {
       if (!token) return jsonResponse({ error: 'Missing Authorization Bearer token' }, 401);
 
       const claims = await verifyFirebaseIdToken(token, env.FIREBASE_PROJECT_ID);
-      const isAdmin = claims.email_verified === true && claims.email === env.ADMIN_EMAIL;
+      const isAdmin = claims.email_verified === true && claims.admin === true;
 
       if (url.pathname === '/sign-upload' && request.method === 'POST') {
         const body = (await request.json()) as {

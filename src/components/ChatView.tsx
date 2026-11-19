@@ -42,6 +42,7 @@ export const ChatView: React.FC = () => {
     respondToOffer, 
     setSelectedProductForDetail, 
     products, 
+    availableUsers,
     currentUser, 
     deleteProduct,
     markProductAsSold,
@@ -663,9 +664,17 @@ export const ChatView: React.FC = () => {
                     <span className="text-xs font-bold text-white truncate">
                       {activeConv.participantName}
                     </span>
-                    <span title={t.verifiedSeller}>
-                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    </span>
+                    {(() => {
+                      const participantUser = availableUsers?.find((u) => u.id === activeConv.participantId);
+                      const isParticipantVerified =
+                        participantUser?.verifiedIdentity ??
+                        (convProduct?.sellerId === activeConv.participantId ? Boolean(convProduct.sellerVerified) : false);
+                      return isParticipantVerified ? (
+                        <span title={t.verifiedSeller}>
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        </span>
+                      ) : null;
+                    })()}
                   </div>
                   <div className="text-[11px] text-neutral-400 truncate">
                     {activeConv.productTitle}

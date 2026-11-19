@@ -20,20 +20,111 @@ service cloud.firestore {
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
-    function isVerifiedAdminEmail() {
-      return isVerifiedUser() && request.auth.token.email == 'batydaishab@gmail.com';
+
+    // Server-trusted Admin check:
+    // - isAdminClaim() uses Firebase Auth Custom Claim `admin == true` (safe inside allow list with 0 DB reads)
+    // - isAdmin() additionally trusts server-protected /admins/{uid} docs for single-document operations
+    function isAdminClaim() {
+      return isVerifiedUser() && request.auth.token.admin == true;
     }
     function isAdmin() {
-      return isVerifiedUser() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        request.auth.token.email == 'batydaishab@gmail.com'
-      );
+      return isAdminClaim()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    // Server-enforced suspension check (denies writes for suspended users until suspension expires or admin unsuspends)
+    function isActivePublicUser(uid) {
+      return exists(/databases/$(database)/documents/users_public/$(uid))
+        && (
+          get(/databases/$(database)/documents/users_public/$(uid)).data.status == 'active'
+          || (
+            get(/databases/$(database)/documents/users_public/$(uid)).data.status == 'suspended'
+            && ('suspendedUntilTs' in get(/databases/$(database)/documents/users_public/$(uid)).data)
+            && get(/databases/$(database)/documents/users_public/$(uid)).data.suspendedUntilTs is timestamp
+            && get(/databases/$(database)/documents/users_public/$(uid)).data.suspendedUntilTs < request.time
+          )
+        );
+    }
+    function isNotSuspended() {
+      return isSignedIn() && (isAdmin() || isActivePublicUser(request.auth.uid));
+    }
+
+    // Full bounded-list element validators (unrolled across exact max sizes)
+    function isValidImageUrlItem(item) {
+      return item is string && item.size() >= 1 && item.size() <= 1000 && item.matches('^https?://.*');
+    }
+    function isValidImagesList(list) {
+      return list is list
+        && list.size() >= 1 && list.size() <= 5
+        && isValidImageUrlItem(list[0])
+        && (list.size() < 2 || isValidImageUrlItem(list[1]))
+        && (list.size() < 3 || isValidImageUrlItem(list[2]))
+        && (list.size() < 4 || isValidImageUrlItem(list[3]))
+        && (list.size() < 5 || isValidImageUrlItem(list[4]));
+    }
+    function isValidFcmTokenItem(item) {
+      return item is string && item.size() >= 1 && item.size() <= 300;
+    }
+    function isValidFcmTokensList(list) {
+      return list is list
+        && list.size() <= 5
+        && (list.size() < 1 || isValidFcmTokenItem(list[0]))
+        && (list.size() < 2 || isValidFcmTokenItem(list[1]))
+        && (list.size() < 3 || isValidFcmTokenItem(list[2]))
+        && (list.size() < 4 || isValidFcmTokenItem(list[3]))
+        && (list.size() < 5 || isValidFcmTokenItem(list[4]));
+    }
+    function isValidReviewTagItem(item) {
+      return item is string && item.size() >= 1 && item.size() <= 50;
+    }
+    function isValidReviewTagsList(list) {
+      return list is list
+        && list.size() <= 6
+        && (list.size() < 1 || isValidReviewTagItem(list[0]))
+        && (list.size() < 2 || isValidReviewTagItem(list[1]))
+        && (list.size() < 3 || isValidReviewTagItem(list[2]))
+        && (list.size() < 4 || isValidReviewTagItem(list[3]))
+        && (list.size() < 5 || isValidReviewTagItem(list[4]))
+        && (list.size() < 6 || isValidReviewTagItem(list[5]));
+    }
+    function isValidOfferHistoryEntry(entry) {
+      return entry is map
+        && entry.keys().hasAll(['actorId', 'status', 'atMillis'])
+        && entry.keys().hasOnly(['actorId', 'status', 'amount', 'atMillis'])
+        && isValidId(entry.actorId)
+        && entry.status in ['pending', 'accepted', 'declined', 'countered']
+        && entry.atMillis is int && entry.atMillis > 0
+        && (!('amount' in entry) || (entry.amount is number && entry.amount > 0));
+    }
+    function isAppendedOfferHistoryValid(prev, next) {
+      return ('offerHistory' in next)
+        && next.offerHistory is list
+        && next.offerHistory.size() <= 30
+        && (
+          (
+            (!('offerHistory' in prev) || prev.offerHistory.size() == 0)
+            && next.offerHistory.size() == 1
+          ) ||
+          (
+            ('offerHistory' in prev)
+            && prev.offerHistory is list
+            && prev.offerHistory.size() > 0
+            && prev.offerHistory.size() < 30
+            && next.offerHistory.size() == prev.offerHistory.size() + 1
+            && next.offerHistory[0:prev.offerHistory.size()] == prev.offerHistory
+          )
+        )
+        && isValidOfferHistoryEntry(next.offerHistory[next.offerHistory.size() - 1])
+        && next.offerHistory[next.offerHistory.size() - 1].actorId == request.auth.uid
+        && next.offerHistory[next.offerHistory.size() - 1].status == next.offerStatus
+        && (next.offerStatus != 'pending' || (('amount' in next.offerHistory[next.offerHistory.size() - 1]) && next.offerHistory[next.offerHistory.size() - 1].amount == next.offerAmount))
+        && (next.offerStatus != 'countered' || (('amount' in next.offerHistory[next.offerHistory.size() - 1]) && next.offerHistory[next.offerHistory.size() - 1].amount == next.counterAmount));
     }
 
     // 3. Entity Validators (No existing()/diff() inside create/update helpers)
     function isValidPublicUser(data) {
       return data.keys().hasAll(['uid', 'name', 'city', 'rating', 'dealsCompleted', 'verifiedIdentity', 'status', 'joinedDate', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'suspendedUntil', 'suspensionDays', 'suspensionReason', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'suspendedUntil', 'suspendedUntilTs', 'suspensionDays', 'suspensionReason', 'lastSoldProductId', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
         && isValidId(data.uid)
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
@@ -44,8 +135,10 @@ service cloud.firestore {
         && data.verifiedIdentity is bool
         && data.status in ['active', 'suspended']
         && (!('suspendedUntil' in data) || (data.suspendedUntil is string && data.suspendedUntil.size() <= 64))
+        && (!('suspendedUntilTs' in data) || data.suspendedUntilTs is timestamp)
         && (!('suspensionDays' in data) || (data.suspensionDays is int && data.suspensionDays >= 0 && data.suspensionDays <= 3650))
         && (!('suspensionReason' in data) || (data.suspensionReason is string && data.suspensionReason.size() <= 500))
+        && (!('lastSoldProductId' in data) || isValidId(data.lastSoldProductId))
         && (!('accountType' in data) || data.accountType in ['personal', 'store', 'company'])
         && (!('businessActivity' in data) || (data.businessActivity is string && data.businessActivity.size() <= 120))
         && (!('businessLogo' in data) || (data.businessLogo is string && data.businessLogo.size() <= 1000))
@@ -55,7 +148,7 @@ service cloud.firestore {
 
     function isValidCommercialProfile(data) {
       return data.keys().hasAll(['uid', 'name', 'city', 'rating', 'dealsCompleted', 'verifiedIdentity', 'status', 'accountType', 'joinedDate', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'avatar', 'city', 'rating', 'dealsCompleted', 'reportsCount', 'verifiedIdentity', 'status', 'lastSoldProductId', 'accountType', 'businessActivity', 'businessLogo', 'joinedDate', 'updatedAt'])
         && isValidId(data.uid)
         && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
@@ -65,6 +158,7 @@ service cloud.firestore {
         && (!('reportsCount' in data) || (data.reportsCount is int && data.reportsCount >= 0))
         && data.verifiedIdentity is bool
         && data.status in ['active', 'suspended']
+        && (!('lastSoldProductId' in data) || isValidId(data.lastSoldProductId))
         && data.accountType in ['store', 'company']
         && (!('businessActivity' in data) || (data.businessActivity is string && data.businessActivity.size() <= 120))
         && (!('businessLogo' in data) || (data.businessLogo is string && data.businessLogo.size() <= 1000))
@@ -74,20 +168,55 @@ service cloud.firestore {
 
     function isValidPrivateUser(data) {
       return data.keys().hasAll(['uid', 'phone', 'role', 'rewardCredits', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'email', 'phone', 'role', 'rewardCredits', 'fcmTokens', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'role', 'rewardCredits', 'lastCreditTxId', 'fcmTokens', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && (!('email' in data) || (data.email is string && data.email.size() <= 160))
         && data.phone is string && data.phone.size() >= 6 && data.phone.size() <= 32
         && data.role in ['user', 'admin']
         && data.rewardCredits is int && data.rewardCredits >= 0 && data.rewardCredits <= 1000
-        && (!('fcmTokens' in data) || (data.fcmTokens is list && data.fcmTokens.size() <= 5 && (data.fcmTokens.size() == 0 || (data.fcmTokens[0] is string && data.fcmTokens[0].size() <= 300))))
+        && (!('lastCreditTxId' in data) || isValidId(data.lastCreditTxId))
+        && (!('fcmTokens' in data) || isValidFcmTokensList(data.fcmTokens))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
+    function isValidVerificationRequest(data) {
+      return data.keys().hasAll(['id', 'uid', 'userName', 'accountType', 'city', 'note', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'uid', 'userName', 'userAvatar', 'accountType', 'city', 'note', 'documentUrl', 'status', 'reviewedBy', 'rejectionReason', 'createdAt', 'updatedAt', 'reviewedAt'])
+        && isValidId(data.id)
+        && isValidId(data.uid)
+        && data.userName is string && data.userName.size() >= 2 && data.userName.size() <= 80
+        && (!('userAvatar' in data) || (data.userAvatar is string && data.userAvatar.size() <= 1000))
+        && data.accountType in ['personal', 'store', 'company']
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 100
+        && data.note is string && data.note.size() >= 5 && data.note.size() <= 600
+        && (!('documentUrl' in data) || (data.documentUrl is string && data.documentUrl.size() <= 1000))
+        && data.status in ['pending', 'approved', 'rejected', 'revoked']
+        && (!('reviewedBy' in data) || isValidId(data.reviewedBy))
+        && (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 400))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && (!('reviewedAt' in data) || data.reviewedAt is timestamp);
+    }
+
+    function isValidCreditTransaction(data) {
+      return data.keys().hasAll(['id', 'uid', 'type', 'amount', 'balanceBefore', 'balanceAfter', 'reason', 'createdAt'])
+        && data.keys().hasOnly(['id', 'uid', 'type', 'amount', 'balanceBefore', 'balanceAfter', 'productId', 'grantedBy', 'reason', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.uid)
+        && data.type in ['admin_grant', 'system_reward', 'ad_boost_spend']
+        && data.amount is int && data.amount >= -1 && data.amount <= 100 && data.amount != 0
+        && data.balanceBefore is int && data.balanceBefore >= 0 && data.balanceBefore <= 1000
+        && data.balanceAfter is int && data.balanceAfter >= 0 && data.balanceAfter <= 1000
+        && (!('productId' in data) || isValidId(data.productId))
+        && (!('grantedBy' in data) || isValidId(data.grantedBy))
+        && data.reason is string && data.reason.size() >= 2 && data.reason.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
     function isValidProduct(data) {
       return data.keys().hasAll(['id', 'titleAr', 'descriptionAr', 'price', 'category', 'condition', 'city', 'images', 'sellerId', 'sellerName', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerId', 'sellerName', 'sellerAvatar', 'sellerRating', 'sellerDealsCount', 'sellerVerified', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerId', 'sellerName', 'sellerAvatar', 'sellerRating', 'sellerDealsCount', 'sellerVerified', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'featuredTxId', 'viewsCount', 'likesCount', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && data.titleAr is string && data.titleAr.size() >= 2 && data.titleAr.size() <= 120
         && (!('titleEn' in data) || (data.titleEn is string && data.titleEn.size() <= 120))
@@ -100,7 +229,7 @@ service cloud.firestore {
         && data.city is string && data.city.size() >= 2 && data.city.size() <= 100
         && (!('areaAr' in data) || (data.areaAr is string && data.areaAr.size() <= 100))
         && (!('areaEn' in data) || (data.areaEn is string && data.areaEn.size() <= 100))
-        && data.images is list && data.images.size() >= 1 && data.images.size() <= 5 && data.images[0] is string && data.images[0].size() <= 1000
+        && isValidImagesList(data.images)
         && (!('thumbnailUrl' in data) || (data.thumbnailUrl is string && data.thumbnailUrl.size() <= 1000))
         && isValidId(data.sellerId)
         && data.sellerName is string && data.sellerName.size() >= 2 && data.sellerName.size() <= 80
@@ -115,6 +244,7 @@ service cloud.firestore {
         && data.deliveryAvailable is bool
         && (!('urgentSale' in data) || data.urgentSale is bool)
         && (!('featured' in data) || data.featured is bool)
+        && (!('featuredTxId' in data) || isValidId(data.featuredTxId))
         && data.viewsCount is int && data.viewsCount >= 0
         && data.likesCount is int && data.likesCount >= 0
         && data.status in ['active', 'sold', 'under_review', 'flagged']
@@ -124,7 +254,7 @@ service cloud.firestore {
 
     function isValidConversation(data) {
       return data.keys().hasAll(['id', 'productId', 'buyerId', 'sellerId', 'participantIds', 'lastMessage', 'offerStatus', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'productId', 'productTitle', 'productPrice', 'productImage', 'buyerId', 'sellerId', 'participantIds', 'buyerName', 'buyerAvatar', 'sellerName', 'sellerAvatar', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'offerAmount', 'counterAmount', 'offerStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'productId', 'productTitle', 'productPrice', 'productImage', 'buyerId', 'sellerId', 'participantIds', 'buyerName', 'buyerAvatar', 'sellerName', 'sellerAvatar', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'offerAmount', 'counterAmount', 'offerStatus', 'offerUpdatedBy', 'acceptedBy', 'acceptedAt', 'offerHistory', 'createdAt', 'updatedAt'])
         && isValidId(data.id)
         && isValidId(data.productId)
         && isValidId(data.buyerId)
@@ -145,6 +275,10 @@ service cloud.firestore {
         && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount > 0))
         && (!('counterAmount' in data) || (data.counterAmount is number && data.counterAmount > 0))
         && data.offerStatus in ['none', 'pending', 'accepted', 'declined', 'countered']
+        && (!('offerUpdatedBy' in data) || isValidId(data.offerUpdatedBy))
+        && (!('acceptedBy' in data) || isValidId(data.acceptedBy))
+        && (!('acceptedAt' in data) || data.acceptedAt is timestamp)
+        && (!('offerHistory' in data) || (data.offerHistory is list && data.offerHistory.size() <= 30 && (data.offerHistory.size() == 0 || isValidOfferHistoryEntry(data.offerHistory[0]))))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -166,8 +300,8 @@ service cloud.firestore {
     }
 
     function isValidReview(data) {
-      return data.keys().hasAll(['id', 'sellerId', 'reviewerId', 'rating', 'comment', 'createdAt'])
-        && data.keys().hasOnly(['id', 'sellerId', 'reviewerId', 'reviewerName', 'reviewerAvatar', 'rating', 'comment', 'tags', 'productId', 'productTitle', 'createdAt'])
+      return data.keys().hasAll(['id', 'sellerId', 'reviewerId', 'productId', 'conversationId', 'rating', 'comment', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sellerId', 'reviewerId', 'reviewerName', 'reviewerAvatar', 'rating', 'comment', 'tags', 'productId', 'conversationId', 'productTitle', 'createdAt'])
         && isValidId(data.id)
         && isValidId(data.sellerId)
         && isValidId(data.reviewerId)
@@ -176,8 +310,9 @@ service cloud.firestore {
         && data.comment is string && data.comment.size() >= 2 && data.comment.size() <= 600
         && (!('reviewerName' in data) || (data.reviewerName is string && data.reviewerName.size() <= 80))
         && (!('reviewerAvatar' in data) || (data.reviewerAvatar is string && data.reviewerAvatar.size() <= 1000))
-        && (!('tags' in data) || (data.tags is list && data.tags.size() <= 6 && (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() <= 50))))
-        && (!('productId' in data) || isValidId(data.productId))
+        && (!('tags' in data) || isValidReviewTagsList(data.tags))
+        && isValidId(data.productId)
+        && isValidId(data.conversationId)
         && (!('productTitle' in data) || (data.productTitle is string && data.productTitle.size() <= 140))
         && data.createdAt is timestamp;
     }
@@ -279,21 +414,27 @@ service cloud.firestore {
     // Admins registry (locked to admins only)
     match /admins/{adminId} {
       allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
-      allow list: if isVerifiedAdminEmail();
+      allow list: if isAdminClaim();
       allow create, update, delete: if isValidId(adminId) && isAdmin();
     }
 
-    // Public User Profiles (No PII)
+    // Public User Profiles (No PII; verifiedIdentity & suspension are strictly Admin-only)
     match /users_public/{userId} {
       allow get: if isValidId(userId) && isSignedIn();
-      allow list: if isSignedIn() && (existing().status == 'active' || isVerifiedAdminEmail());
+      allow list: if isSignedIn() && (existing().status == 'active' || isAdminClaim());
       allow create: if isValidId(userId)
         && isOwner(userId)
         && isValidPublicUser(incoming())
         && incoming().uid == request.auth.uid
         && incoming().status == 'active'
         && incoming().verifiedIdentity == false
+        && (incoming().rating == 5 || incoming().rating == 5.0)
         && incoming().dealsCompleted == 0
+        && !('suspendedUntil' in incoming())
+        && !('suspendedUntilTs' in incoming())
+        && !('suspensionDays' in incoming())
+        && !('suspensionReason' in incoming())
+        && !('lastSoldProductId' in incoming())
         && incoming().joinedDate == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(userId)
@@ -304,12 +445,25 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])) ||
           (
-            isOwner(userId)
-            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'verifiedIdentity', 'updatedAt'])
+            isNotSuspended()
+            && isOwner(userId)
+            && incoming().verifiedIdentity == existing().verifiedIdentity
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])
+          ) ||
+          (
+            isNotSuspended()
+            && isOwner(userId)
+            && incoming().verifiedIdentity == existing().verifiedIdentity
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'lastSoldProductId', 'updatedAt'])
             && incoming().dealsCompleted == existing().dealsCompleted + 1
-            && incoming().verifiedIdentity == (incoming().dealsCompleted >= 10 && (!('reportsCount' in existing()) || existing().reportsCount == 0))
+            && 'lastSoldProductId' in incoming()
+            && isValidId(incoming().lastSoldProductId)
+            && get(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.sellerId == userId
+            && get(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.status == 'active'
+            && getAfter(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.status == 'sold'
           )
         );
       allow delete: if isValidId(userId) && isAdmin();
@@ -318,27 +472,19 @@ service cloud.firestore {
     // Public Store & Company Directory Profiles (Zero PII, Guest-readable)
     match /commercial_profiles/{profileId} {
       allow get: if isValidId(profileId) && (isOwner(profileId) || isAdmin() || (resource != null && existing().status == 'active' && existing().accountType in ['store', 'company']));
-      allow list: if (existing().status == 'active' && existing().accountType in ['store', 'company']) || isVerifiedAdminEmail();
+      allow list: if (existing().status == 'active' && existing().accountType in ['store', 'company']) || isAdminClaim();
       allow create: if isValidId(profileId)
         && isOwner(profileId)
+        && isNotSuspended()
         && isValidCommercialProfile(incoming())
         && incoming().uid == request.auth.uid
         && incoming().updatedAt == request.time
-        && (
-          (
-            incoming().status == 'active'
-            && incoming().verifiedIdentity == false
-            && incoming().dealsCompleted == 0
-            && incoming().joinedDate == request.time
-          ) ||
-          (
-            exists(/databases/$(database)/documents/users_public/$(profileId))
-            && incoming().status == get(/databases/$(database)/documents/users_public/$(profileId)).data.status
-            && incoming().verifiedIdentity == get(/databases/$(database)/documents/users_public/$(profileId)).data.verifiedIdentity
-            && incoming().dealsCompleted == get(/databases/$(database)/documents/users_public/$(profileId)).data.dealsCompleted
-            && incoming().joinedDate == get(/databases/$(database)/documents/users_public/$(profileId)).data.joinedDate
-          )
-        );
+        && !('lastSoldProductId' in incoming())
+        && exists(/databases/$(database)/documents/users_public/$(profileId))
+        && incoming().status == get(/databases/$(database)/documents/users_public/$(profileId)).data.status
+        && incoming().verifiedIdentity == get(/databases/$(database)/documents/users_public/$(profileId)).data.verifiedIdentity
+        && incoming().dealsCompleted == get(/databases/$(database)/documents/users_public/$(profileId)).data.dealsCompleted
+        && (!('joinedDate' in get(/databases/$(database)/documents/users_public/$(profileId)).data) || incoming().joinedDate == get(/databases/$(database)/documents/users_public/$(profileId)).data.joinedDate);
       allow update: if isValidId(profileId)
         && isSignedIn()
         && isValidCommercialProfile(incoming())
@@ -347,27 +493,41 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(profileId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])) ||
           (
-            isOwner(profileId)
-            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'verifiedIdentity', 'updatedAt'])
+            isNotSuspended()
+            && isOwner(profileId)
+            && incoming().verifiedIdentity == existing().verifiedIdentity
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatar', 'city', 'accountType', 'businessActivity', 'businessLogo', 'updatedAt'])
+          ) ||
+          (
+            isNotSuspended()
+            && isOwner(profileId)
+            && incoming().verifiedIdentity == existing().verifiedIdentity
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealsCompleted', 'lastSoldProductId', 'updatedAt'])
             && incoming().dealsCompleted == existing().dealsCompleted + 1
-            && incoming().verifiedIdentity == (incoming().dealsCompleted >= 10 && (!('reportsCount' in existing()) || existing().reportsCount == 0))
+            && 'lastSoldProductId' in incoming()
+            && isValidId(incoming().lastSoldProductId)
+            && get(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.sellerId == profileId
+            && get(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.status == 'active'
+            && getAfter(/databases/$(database)/documents/products/$(incoming().lastSoldProductId)).data.status == 'sold'
           )
         );
-      allow delete: if isValidId(profileId) && (isOwner(profileId) || isAdmin());
+      allow delete: if isValidId(profileId) && (isAdmin() || (isNotSuspended() && isOwner(profileId)));
     }
 
-    // Private User PII & Subcollections
+    // Private User PII & Subcollections (Credit increments strictly Admin-only; deductions strictly bound to atomic boost tx)
     match /users_private/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
-      allow list: if isVerifiedAdminEmail();
+      allow list: if isAdminClaim();
       allow create: if isValidId(userId)
         && isOwner(userId)
         && isValidPrivateUser(incoming())
         && incoming().uid == request.auth.uid
         && incoming().role == 'user'
         && incoming().rewardCredits == 0
+        && !('lastCreditTxId' in incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(userId)
@@ -379,14 +539,22 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            isOwner(userId)
+            isNotSuspended()
+            && isOwner(userId)
             && incoming().role == existing().role
             && (
               incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'fcmTokens', 'updatedAt']) ||
               (
-                incoming().diff(existing()).affectedKeys().hasOnly(['rewardCredits', 'updatedAt'])
-                && incoming().rewardCredits >= existing().rewardCredits - 1
-                && incoming().rewardCredits <= existing().rewardCredits + 1
+                incoming().diff(existing()).affectedKeys().hasOnly(['rewardCredits', 'lastCreditTxId', 'updatedAt'])
+                && existing().rewardCredits >= 1
+                && incoming().rewardCredits == existing().rewardCredits - 1
+                && 'lastCreditTxId' in incoming()
+                && isValidId(incoming().lastCreditTxId)
+                && !exists(/databases/$(database)/documents/credit_transactions/$(incoming().lastCreditTxId))
+                && existsAfter(/databases/$(database)/documents/credit_transactions/$(incoming().lastCreditTxId))
+                && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().lastCreditTxId)).data.uid == userId
+                && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().lastCreditTxId)).data.type == 'ad_boost_spend'
+                && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().lastCreditTxId)).data.amount == -1
               )
             )
           )
@@ -396,30 +564,54 @@ service cloud.firestore {
       match /swipes/{productId} {
         allow get: if isValidId(userId) && isValidId(productId) && isOwner(userId);
         allow list: if isOwner(userId);
-        allow create, update: if isValidId(userId) && isValidId(productId) && isOwner(userId)
+        allow create, update: if isValidId(userId) && isValidId(productId) && isOwner(userId) && isNotSuspended()
           && incoming().keys().hasAll(['productId', 'action', 'createdAt'])
           && incoming().keys().hasOnly(['productId', 'action', 'createdAt'])
           && incoming().productId == productId
           && incoming().action in ['left', 'right', 'superlike']
           && incoming().createdAt == request.time;
-        allow delete: if isValidId(userId) && isValidId(productId) && isOwner(userId);
+        allow delete: if isValidId(userId) && isValidId(productId) && isOwner(userId) && isNotSuspended();
       }
 
       match /favorites/{productId} {
         allow get: if isValidId(userId) && isValidId(productId) && isOwner(userId);
         allow list: if isOwner(userId);
-        allow create: if isValidId(userId) && isValidId(productId) && isOwner(userId)
+        allow create: if isValidId(userId) && isValidId(productId) && isOwner(userId) && isNotSuspended()
           && incoming().keys().hasAll(['productId', 'createdAt'])
           && incoming().keys().hasOnly(['productId', 'createdAt'])
           && incoming().productId == productId
           && incoming().createdAt == request.time
-          && exists(/databases/$(database)/documents/products/$(productId));
-        allow delete: if isValidId(userId) && isValidId(productId) && isOwner(userId);
+          && exists(/databases/$(database)/documents/products/$(productId))
+          && get(/databases/$(database)/documents/products/$(productId)).data.status == 'active'
+          && getAfter(/databases/$(database)/documents/products/$(productId)).data.likesCount == get(/databases/$(database)/documents/products/$(productId)).data.likesCount + 1;
+        allow delete: if isValidId(userId) && isValidId(productId) && isOwner(userId) && isNotSuspended()
+          && (
+            !exists(/databases/$(database)/documents/products/$(productId))
+            || get(/databases/$(database)/documents/products/$(productId)).data.status != 'active'
+            || get(/databases/$(database)/documents/products/$(productId)).data.likesCount == 0
+            || getAfter(/databases/$(database)/documents/products/$(productId)).data.likesCount == get(/databases/$(database)/documents/products/$(productId)).data.likesCount - 1
+          );
+      }
+
+      match /viewed_products/{productId} {
+        allow get: if isValidId(userId) && isValidId(productId) && isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if isValidId(userId) && isValidId(productId) && isOwner(userId) && isNotSuspended()
+          && incoming().keys().hasAll(['productId', 'createdAt'])
+          && incoming().keys().hasOnly(['productId', 'createdAt'])
+          && incoming().productId == productId
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/products/$(productId))
+          && get(/databases/$(database)/documents/products/$(productId)).data.status == 'active'
+          && get(/databases/$(database)/documents/products/$(productId)).data.sellerId != userId
+          && getAfter(/databases/$(database)/documents/products/$(productId)).data.viewsCount == get(/databases/$(database)/documents/products/$(productId)).data.viewsCount + 1;
+        allow update: if false;
+        allow delete: if isValidId(userId) && isValidId(productId) && isAdmin();
       }
 
       match /notifications/{notificationId} {
         allow get: if isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
-        allow list: if isOwner(userId) || isVerifiedAdminEmail();
+        allow list: if isOwner(userId) || isAdminClaim();
         allow create: if isValidId(userId) && isValidId(notificationId)
           && isValidNotification(incoming())
           && incoming().id == notificationId
@@ -428,23 +620,102 @@ service cloud.firestore {
         allow update: if isValidId(userId) && isValidId(notificationId)
           && isValidNotification(incoming())
           && isOwner(userId)
+          && isNotSuspended()
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
           && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
-        allow delete: if isValidId(userId) && isValidId(notificationId) && (isOwner(userId) || isAdmin());
+        allow delete: if isValidId(userId) && isValidId(notificationId) && (isAdmin() || (isOwner(userId) && isNotSuspended()));
       }
     }
 
-    // Marketplace Products
-    match /products/{productId} {
-      allow get: if isValidId(productId);
-      allow list: if existing().status == 'active' || existing().status == 'sold' || (isSignedIn() && existing().sellerId == request.auth.uid) || isVerifiedAdminEmail();
-      allow create: if isValidId(productId)
+    // Account Verification Requests (Submitted by active unverified users; reviewed strictly by Admins)
+    match /verification_requests/{requestId} {
+      allow get: if isValidId(requestId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdminClaim());
+      allow create: if isValidId(requestId)
+        && isNotSuspended()
+        && isValidVerificationRequest(incoming())
+        && incoming().id == requestId
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending'
+        && !('reviewedBy' in incoming())
+        && !('rejectionReason' in incoming())
+        && !('reviewedAt' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && get(/databases/$(database)/documents/users_public/$(request.auth.uid)).data.verifiedIdentity == false;
+      allow update: if isValidId(requestId)
+        && isAdmin()
+        && isValidVerificationRequest(incoming())
+        && incoming().id == existing().id
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().reviewedBy == request.auth.uid
+        && incoming().reviewedAt == request.time
+        && incoming().status in ['approved', 'rejected', 'revoked']
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewedBy', 'rejectionReason', 'reviewedAt', 'updatedAt']);
+      allow delete: if isValidId(requestId) && isAdmin();
+    }
+
+    // Immutable Reward Credit Transaction Ledger (Admin grants & atomic listing boosts only)
+    match /credit_transactions/{txId} {
+      allow get: if isValidId(txId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdminClaim());
+      allow create: if isValidId(txId)
         && isSignedIn()
+        && isValidCreditTransaction(incoming())
+        && incoming().id == txId
+        && incoming().createdAt == request.time
+        && (
+          (
+            isAdmin()
+            && incoming().type == 'admin_grant'
+            && incoming().amount >= 1 && incoming().amount <= 100
+            && incoming().grantedBy == request.auth.uid
+            && exists(/databases/$(database)/documents/users_private/$(incoming().uid))
+            && incoming().balanceBefore == get(/databases/$(database)/documents/users_private/$(incoming().uid)).data.rewardCredits
+            && incoming().balanceAfter == incoming().balanceBefore + incoming().amount
+            && getAfter(/databases/$(database)/documents/users_private/$(incoming().uid)).data.rewardCredits == incoming().balanceAfter
+            && getAfter(/databases/$(database)/documents/users_private/$(incoming().uid)).data.lastCreditTxId == txId
+          ) ||
+          (
+            isNotSuspended()
+            && incoming().uid == request.auth.uid
+            && incoming().type == 'ad_boost_spend'
+            && incoming().amount == -1
+            && 'productId' in incoming()
+            && isValidId(incoming().productId)
+            && get(/databases/$(database)/documents/products/$(incoming().productId)).data.sellerId == request.auth.uid
+            && get(/databases/$(database)/documents/products/$(incoming().productId)).data.status == 'active'
+            && (!('featured' in get(/databases/$(database)/documents/products/$(incoming().productId)).data) || get(/databases/$(database)/documents/products/$(incoming().productId)).data.featured == false)
+            && getAfter(/databases/$(database)/documents/products/$(incoming().productId)).data.featured == true
+            && getAfter(/databases/$(database)/documents/products/$(incoming().productId)).data.featuredTxId == txId
+            && get(/databases/$(database)/documents/users_private/$(request.auth.uid)).data.rewardCredits >= 1
+            && incoming().balanceBefore == get(/databases/$(database)/documents/users_private/$(request.auth.uid)).data.rewardCredits
+            && incoming().balanceAfter == incoming().balanceBefore - 1
+            && getAfter(/databases/$(database)/documents/users_private/$(request.auth.uid)).data.rewardCredits == incoming().balanceAfter
+            && getAfter(/databases/$(database)/documents/users_private/$(request.auth.uid)).data.lastCreditTxId == txId
+          )
+        );
+      allow update, delete: if false;
+    }
+
+    // Marketplace Products (Protected from competitor flagging, suspension bypass, verified spoofing, & unspent featured boost)
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (resource == null || existing().status in ['active', 'sold'] || (isSignedIn() && existing().sellerId == request.auth.uid) || isAdmin());
+      allow list: if existing().status == 'active' || existing().status == 'sold' || (isSignedIn() && existing().sellerId == request.auth.uid) || isAdminClaim();
+      allow create: if isValidId(productId)
+        && isNotSuspended()
         && isValidProduct(incoming())
         && incoming().id == productId
         && incoming().sellerId == request.auth.uid
         && incoming().status == 'active'
+        && (!('featured' in incoming()) || incoming().featured == false)
+        && !('featuredTxId' in incoming())
         && incoming().viewsCount == 0
         && incoming().likesCount == 0
+        && (!('sellerVerified' in incoming()) || incoming().sellerVerified == get(/databases/$(database)/documents/users_public/$(request.auth.uid)).data.verifiedIdentity)
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(productId)
@@ -457,41 +728,89 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            isOwner(existing().sellerId)
-            && existing().status != 'sold'
-            && (
-              incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerName', 'sellerAvatar', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'featured', 'updatedAt']) ||
-              (incoming().status == 'sold' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
-            )
+            isNotSuspended()
+            && isOwner(existing().sellerId)
+            && existing().status == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'price', 'originalPrice', 'category', 'condition', 'city', 'areaAr', 'areaEn', 'images', 'thumbnailUrl', 'sellerName', 'sellerAvatar', 'sellerAccountType', 'sellerBusinessActivity', 'paymentMethods', 'negotiable', 'deliveryAvailable', 'urgentSale', 'updatedAt'])
           ) ||
           (
-            existing().status == 'active'
-            && incoming().status == 'flagged'
+            isNotSuspended()
+            && isOwner(existing().sellerId)
+            && existing().status == 'active'
+            && incoming().status == 'sold'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
           ) ||
           (
-            existing().status == 'active'
-            && incoming().viewsCount >= existing().viewsCount
-            && incoming().viewsCount <= existing().viewsCount + 1
-            && incoming().likesCount >= 0
-            && incoming().likesCount >= existing().likesCount - 1
-            && incoming().likesCount <= existing().likesCount + 1
-            && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'likesCount', 'updatedAt'])
+            isNotSuspended()
+            && isOwner(existing().sellerId)
+            && existing().status == 'active'
+            && (!('featured' in existing()) || existing().featured == false)
+            && incoming().featured == true
+            && 'featuredTxId' in incoming()
+            && isValidId(incoming().featuredTxId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['featured', 'featuredTxId', 'updatedAt'])
+            && !exists(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId))
+            && existsAfter(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId))
+            && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId)).data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId)).data.productId == productId
+            && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId)).data.type == 'ad_boost_spend'
+            && getAfter(/databases/$(database)/documents/credit_transactions/$(incoming().featuredTxId)).data.amount == -1
+          ) ||
+          (
+            isNotSuspended()
+            && existing().status == 'active'
+            && existing().sellerId != request.auth.uid
+            && incoming().viewsCount == existing().viewsCount + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt'])
+            && !exists(/databases/$(database)/documents/users_private/$(request.auth.uid)/viewed_products/$(productId))
+            && existsAfter(/databases/$(database)/documents/users_private/$(request.auth.uid)/viewed_products/$(productId))
+          ) ||
+          (
+            isNotSuspended()
+            && existing().status == 'active'
+            && incoming().likesCount == existing().likesCount + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt'])
+            && !exists(/databases/$(database)/documents/users_private/$(request.auth.uid)/favorites/$(productId))
+            && existsAfter(/databases/$(database)/documents/users_private/$(request.auth.uid)/favorites/$(productId))
+          ) ||
+          (
+            isNotSuspended()
+            && existing().status == 'active'
+            && existing().likesCount > 0
+            && incoming().likesCount == existing().likesCount - 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt'])
+            && exists(/databases/$(database)/documents/users_private/$(request.auth.uid)/favorites/$(productId))
+            && !existsAfter(/databases/$(database)/documents/users_private/$(request.auth.uid)/favorites/$(productId))
           )
         );
-      allow delete: if isValidId(productId) && (isAdmin() || (isSignedIn() && isOwner(existing().sellerId)));
+      allow delete: if isValidId(productId) && (
+        isAdmin() ||
+        (
+          isNotSuspended()
+          && isOwner(existing().sellerId)
+          && existing().status in ['active', 'sold']
+        )
+      );
     }
 
-    // Conversations & Subcollection Messages
+    // Conversations & Strict Offer State Machine
     match /conversations/{conversationId} {
       allow get: if isValidId(conversationId) && isSignedIn() && (request.auth.uid in existing().participantIds || isAdmin());
-      allow list: if isSignedIn() && (request.auth.uid in existing().participantIds || isVerifiedAdminEmail());
+      allow list: if isSignedIn() && (request.auth.uid in existing().participantIds || isAdminClaim());
       allow create: if isValidId(conversationId)
-        && isSignedIn()
+        && isNotSuspended()
         && isValidConversation(incoming())
         && incoming().id == conversationId
-        && (request.auth.uid == incoming().buyerId || request.auth.uid == incoming().sellerId)
-        && exists(/databases/$(database)/documents/products/$(incoming().productId))
+        && request.auth.uid == incoming().buyerId
+        && incoming().offerStatus == 'none'
+        && !('offerAmount' in incoming())
+        && !('counterAmount' in incoming())
+        && !('acceptedBy' in incoming())
+        && !('acceptedAt' in incoming())
+        && !('offerUpdatedBy' in incoming())
+        && (!('offerHistory' in incoming()) || incoming().offerHistory.size() == 0)
+        && get(/databases/$(database)/documents/products/$(incoming().productId)).data.status == 'active'
+        && incoming().sellerId == get(/databases/$(database)/documents/products/$(incoming().productId)).data.sellerId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(conversationId)
@@ -507,8 +826,71 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            request.auth.uid in existing().participantIds
-            && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'unreadByBuyer', 'unreadBySeller', 'offerAmount', 'counterAmount', 'offerStatus', 'updatedAt'])
+            isNotSuspended()
+            && request.auth.uid in existing().participantIds
+            && (
+              // Regular chat & read receipt update (never changes offer fields or offerHistory)
+              incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt']) ||
+              // Action 1: Buyer submits new or updated offer -> pending (never overrides accepted)
+              (
+                request.auth.uid == existing().buyerId
+                && existing().offerStatus in ['none', 'declined', 'pending', 'countered']
+                && get(/databases/$(database)/documents/products/$(existing().productId)).data.status == 'active'
+                && incoming().offerStatus == 'pending'
+                && 'offerAmount' in incoming()
+                && incoming().offerAmount is number && incoming().offerAmount > 0
+                && incoming().offerUpdatedBy == request.auth.uid
+                && isAppendedOfferHistoryValid(existing(), incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['offerStatus', 'offerAmount', 'offerUpdatedBy', 'offerHistory', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt'])
+              ) ||
+              // Action 2: Seller sends counter offer on pending buyer offer -> countered
+              (
+                request.auth.uid == existing().sellerId
+                && existing().offerStatus == 'pending'
+                && get(/databases/$(database)/documents/products/$(existing().productId)).data.status == 'active'
+                && incoming().offerStatus == 'countered'
+                && 'counterAmount' in incoming()
+                && incoming().counterAmount is number && incoming().counterAmount > 0
+                && incoming().offerUpdatedBy == request.auth.uid
+                && isAppendedOfferHistoryValid(existing(), incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['offerStatus', 'counterAmount', 'offerUpdatedBy', 'offerHistory', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt'])
+              ) ||
+              // Action 3: Seller accepts pending buyer offer -> accepted (terminal, amounts locked)
+              (
+                request.auth.uid == existing().sellerId
+                && existing().offerStatus == 'pending'
+                && get(/databases/$(database)/documents/products/$(existing().productId)).data.status == 'active'
+                && incoming().offerStatus == 'accepted'
+                && incoming().acceptedBy == request.auth.uid
+                && incoming().acceptedAt == request.time
+                && incoming().offerUpdatedBy == request.auth.uid
+                && isAppendedOfferHistoryValid(existing(), incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['offerStatus', 'acceptedBy', 'acceptedAt', 'offerUpdatedBy', 'offerHistory', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt'])
+              ) ||
+              // Action 4: Buyer accepts seller's counter offer -> accepted (terminal, amounts locked)
+              (
+                request.auth.uid == existing().buyerId
+                && existing().offerStatus == 'countered'
+                && get(/databases/$(database)/documents/products/$(existing().productId)).data.status == 'active'
+                && incoming().offerStatus == 'accepted'
+                && incoming().acceptedBy == request.auth.uid
+                && incoming().acceptedAt == request.time
+                && incoming().offerUpdatedBy == request.auth.uid
+                && isAppendedOfferHistoryValid(existing(), incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['offerStatus', 'acceptedBy', 'acceptedAt', 'offerUpdatedBy', 'offerHistory', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt'])
+              ) ||
+              // Action 5: Seller declines pending offer OR Buyer declines counter offer -> declined
+              (
+                (
+                  (request.auth.uid == existing().sellerId && existing().offerStatus == 'pending') ||
+                  (request.auth.uid == existing().buyerId && existing().offerStatus == 'countered')
+                )
+                && incoming().offerStatus == 'declined'
+                && incoming().offerUpdatedBy == request.auth.uid
+                && isAppendedOfferHistoryValid(existing(), incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['offerStatus', 'offerUpdatedBy', 'offerHistory', 'lastMessage', 'unreadByBuyer', 'unreadBySeller', 'updatedAt'])
+              )
+            )
           )
         );
       allow delete: if isValidId(conversationId) && isAdmin();
@@ -522,17 +904,26 @@ service cloud.firestore {
         allow list: if isSignedIn()
           && (
             request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
-            || isAdmin()
+            || isAdminClaim()
           );
         allow create: if isValidId(conversationId) && isValidId(messageId)
-          && isSignedIn()
+          && isNotSuspended()
           && isValidMessage(incoming())
           && incoming().id == messageId
           && incoming().senderId == request.auth.uid
           && incoming().createdAt == request.time
-          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds;
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
+          && (
+            !('isOfferUpdate' in incoming())
+            || incoming().isOfferUpdate == false
+            || (
+              incoming().isOfferUpdate == true
+              && getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.offerUpdatedBy == request.auth.uid
+              && getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data.updatedAt == request.time
+            )
+          );
         allow update: if isValidId(conversationId) && isValidId(messageId)
-          && isSignedIn()
+          && isNotSuspended()
           && isValidMessage(incoming())
           && incoming().id == existing().id
           && incoming().senderId == existing().senderId
@@ -543,25 +934,34 @@ service cloud.firestore {
       }
     }
 
-    // Seller Reviews
+    // Seller Reviews (1 per buyer per completed accepted deal; suspended users blocked)
     match /reviews/{reviewId} {
       allow get: if isValidId(reviewId);
       allow list: if existing().rating >= 1;
       allow create: if isValidId(reviewId)
-        && isSignedIn()
+        && isNotSuspended()
         && isValidReview(incoming())
         && incoming().id == reviewId
+        && reviewId == incoming().productId + '_' + request.auth.uid
         && incoming().reviewerId == request.auth.uid
-        && incoming().createdAt == request.time;
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/products/$(incoming().productId))
+        && get(/databases/$(database)/documents/products/$(incoming().productId)).data.sellerId == incoming().sellerId
+        && get(/databases/$(database)/documents/products/$(incoming().productId)).data.status == 'sold'
+        && exists(/databases/$(database)/documents/conversations/$(incoming().conversationId))
+        && get(/databases/$(database)/documents/conversations/$(incoming().conversationId)).data.buyerId == request.auth.uid
+        && get(/databases/$(database)/documents/conversations/$(incoming().conversationId)).data.sellerId == incoming().sellerId
+        && get(/databases/$(database)/documents/conversations/$(incoming().conversationId)).data.productId == incoming().productId
+        && get(/databases/$(database)/documents/conversations/$(incoming().conversationId)).data.offerStatus == 'accepted';
       allow update, delete: if isValidId(reviewId) && isAdmin();
     }
 
-    // Moderation Reports
+    // Moderation Reports (Suspended users blocked; reporting never disables listings)
     match /reports/{reportId} {
       allow get: if isValidId(reportId) && isSignedIn() && (existing().reporterId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (existing().reporterId == request.auth.uid || isVerifiedAdminEmail());
+      allow list: if isSignedIn() && (existing().reporterId == request.auth.uid || isAdminClaim());
       allow create: if isValidId(reportId)
-        && isSignedIn()
+        && isNotSuspended()
         && isValidReport(incoming())
         && incoming().id == reportId
         && incoming().reporterId == request.auth.uid
@@ -577,10 +977,10 @@ service cloud.firestore {
       allow delete: if isValidId(reportId) && isAdmin();
     }
 
-    // Sponsored Ads & Monetization
+    // Sponsored Ads & Monetization (Inactive ads strictly Admin-only for both get & list)
     match /sponsored_ads/{adId} {
-      allow get: if isValidId(adId);
-      allow list: if existing().isActive == true || isVerifiedAdminEmail();
+      allow get: if isValidId(adId) && ((resource != null && existing().isActive == true) || isAdmin());
+      allow list: if existing().isActive == true || isAdminClaim();
       allow create: if isValidId(adId)
         && isAdmin()
         && isValidSponsoredAd(incoming())
@@ -595,7 +995,7 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            isSignedIn()
+            isNotSuspended()
             && existing().isActive == true
             && incoming().clicksCount >= existing().clicksCount
             && incoming().clicksCount <= existing().clicksCount + 1
@@ -609,7 +1009,7 @@ service cloud.firestore {
 
     match /ad_config/{configId} {
       allow get: if isValidId(configId) && isSignedIn();
-      allow list: if isVerifiedAdminEmail();
+      allow list: if isAdminClaim();
       allow create, update: if isValidId(configId)
         && isAdmin()
         && isValidAdConfig(incoming())
@@ -619,7 +1019,7 @@ service cloud.firestore {
 
     match /broadcast_notifications/{notificationId} {
       allow get: if isValidId(notificationId) && isSignedIn();
-      allow list: if isSignedIn() && (existing().type in ['offer', 'message', 'price_drop', 'verification', 'system', 'alert', 'update'] || isVerifiedAdminEmail());
+      allow list: if isSignedIn() && (existing().type in ['offer', 'message', 'price_drop', 'verification', 'system', 'alert', 'update'] || isAdminClaim());
       allow create: if isValidId(notificationId)
         && isAdmin()
         && isValidNotification(incoming())
@@ -635,7 +1035,7 @@ service cloud.firestore {
 
     match /system_stats/{statId} {
       allow get: if isValidId(statId) && isAdmin();
-      allow list: if isVerifiedAdminEmail();
+      allow list: if isAdminClaim();
       allow create, update: if isValidId(statId)
         && isAdmin()
         && isValidMediaQuotaStat(incoming())

@@ -87,6 +87,7 @@ data class HatchStrings(
     val shareAd: String,
     val reportAd: String,
     val rateSeller: String,
+    val dealRatedLabel: String,
     val safetyTitle: String,
     val safetyWarningShort: String,
     val postAdTitle: String,
@@ -157,7 +158,15 @@ data class HatchStrings(
     val guestPromptRateOrReport: String,
     val guestPromptGeneral: String,
     val guestStorefrontReadOnlyHint: String,
-    val guestDetailSignInToContact: String
+    val guestDetailSignInToContact: String,
+    val goldBadgeGrantedTitle: String,
+    val goldBadgeAdminDesc: String,
+    val requestGoldVerification: String,
+    val verificationPendingLabel: String,
+    val verificationRejectedLabel: String,
+    val verificationNoteLabel: String,
+    val verificationDocUrlLabel: String,
+    val submitVerificationBtn: String
 ) {
     fun guestPromptMessage(reason: GuestPromptReason): String = when (reason) {
         GuestPromptReason.CONTACT_OR_BUY -> guestPromptContactOrBuy
@@ -305,13 +314,13 @@ data class HatchStrings(
             ),
             BroadcastTemplate(
                 id = "verify",
-                labelAr = "توثيق 10 صفقات",
-                labelEn = "Verification",
+                labelAr = "شارة التوثيق الذهبية",
+                labelEn = "Gold Verification",
                 type = "system",
                 titleAr = "كيف تحصل على شارة التوثيق الذهبية؟",
-                titleEn = "Unlock Verified Seller Badge",
-                bodyAr = "أكمل 10 صفقات ناجحة بدون أي مخالفات ليتم توثيق حسابك تلقائياً!",
-                bodyEn = "Complete 10 successful deals with zero reports to earn your Verified badge automatically!"
+                titleEn = "How to Earn the Gold Verified Badge",
+                bodyAr = "تُمنح شارة التوثيق الذهبية حصرياً من إدارة هتش بعد مراجعة نشاط الحساب وسجل الصفقات وتقديم طلب التوثيق من ملفك الشخصي.",
+                bodyEn = "The Gold Verified Badge is granted exclusively by HATCH Administration after reviewing your account activity and verification request."
             )
         )
 
@@ -426,12 +435,13 @@ data class HatchStrings(
             shareAd = "مشاركة",
             reportAd = "إبلاغ عن مخالفة",
             rateSeller = "تقييم البائع",
+            dealRatedLabel = "تم تقييم هذه الصفقة",
             safetyTitle = "إرشادات التداول الآمن في هتش",
             safetyWarningShort = "تحذير هتش: لا تحوّل أي عربون عبر بنكك أو فوري قبل معاينة السلعة شخصياً.",
             postAdTitle = "نشر إعلان جديد",
             editAdTitle = "تعديل الإعلان",
             markSoldTitle = "تأكيد إتمام البيع",
-            markSoldConfirmBody = "هل تم بيع هذا المنتج بالفعل؟ سيتم أرشفة الإعلان وزيادة عداد صفقاتك الناجحة (+1) نحو شارة التوثيق.",
+            markSoldConfirmBody = "هل تم بيع هذا المنتج بالفعل؟ سيتم أرشفة الإعلان وزيادة عداد صفقاتك الناجحة (+1).",
             signInTitle = "مرحباً بك في هتش",
             signInSubtitle = "سجّل الدخول بحساب Google لنشر الإعلانات والتفاوض المباشر ومزامنة مفضلاتك سحابياً",
             signInGoogle = "المتابعة باستخدام Google",
@@ -443,10 +453,10 @@ data class HatchStrings(
             suspendedBannerTitle = "حسابك موقوف مؤقتاً من الإدارة",
             suspendedActionBlocked = "الحساب موقوف حالياً: لا يمكنك نشر إعلانات أو تقديم عروض جديدة حتى انتهاء المدة.",
             offlineBanner = "لا يوجد اتصال بالإنترنت — يتم عرض البيانات المخزنة مؤقتاً",
-            verifiedProgressTitle = "تقدم شارة التوثيق (10 صفقات بدون مخالفات)",
-            boostRewardTitle = "رصيد الترويج المجاني",
-            boostRewardSubtitle = "شاهد إعلاناً قصيراً لربح رصيد يميّز إعلانك في أعلى السوق",
-            watchAdForCredit = "شاهد إعلان (+1 رصيد)",
+            verifiedProgressTitle = "حالة التوثيق الذهبي (تُمنح بمراجعة إدارة هتش)",
+            boostRewardTitle = "رصيد تمييز الإعلانات",
+            boostRewardSubtitle = "رصيد التمييز يُمنح من إدارة هتش لرفع إعلانك في صدارة السوق",
+            watchAdForCredit = "عرض ترويجي",
             boostListingBtn = "تمييز إعلان (1 رصيد)",
             chatEmptyTitle = "لا توجد محادثات بعد",
             chatEmptySubtitle = "ابدأ التفاوض على أي منتج من السوق أو شاشة التمرير السريع.",
@@ -496,7 +506,15 @@ data class HatchStrings(
             guestPromptRateOrReport = "سجّل دخولك إلى HATCH لتتمكن من تقييم البائعين أو إرسال البلاغات.",
             guestPromptGeneral = "سجّل دخولك إلى HATCH للاستفادة من جميع خدمات البيع والشراء والتواصل.",
             guestStorefrontReadOnlyHint = "وضع التصفح كضيف — سجّل الدخول للتواصل أو الشراء من هذه الصفحة",
-            guestDetailSignInToContact = "التواصل والشراء متاح بعد تسجيل الدخول"
+            guestDetailSignInToContact = "التواصل والشراء متاح بعد تسجيل الدخول",
+            goldBadgeGrantedTitle = "حساب موثق بالشارة الذهبية من الإدارة",
+            goldBadgeAdminDesc = "تُمنح الشارة الذهبية فقط بعد مراجعة إدارة هتش لبيانات الحساب والالتزام بسياسات الأمان.",
+            requestGoldVerification = "طلب التوثيق الذهبي",
+            verificationPendingLabel = "طلب التوثيق قيد مراجعة الإدارة",
+            verificationRejectedLabel = "تم رفض الطلب السابق — يمكنك التقديم مجدداً",
+            verificationNoteLabel = "ملاحظات طلب التوثيق (5 أحرف فأكثر) *",
+            verificationDocUrlLabel = "رابط إثبات النشاط أو المستند HTTPS (اختياري)",
+            submitVerificationBtn = "إرسال طلب التوثيق"
         )
 
         private val English = HatchStrings(
@@ -547,12 +565,13 @@ data class HatchStrings(
             shareAd = "Share",
             reportAd = "Report Violation",
             rateSeller = "Rate Seller",
+            dealRatedLabel = "Deal Rated",
             safetyTitle = "HATCH Safe Trading Guide",
             safetyWarningShort = "HATCH Safety: Never send upfront Bankak/Fawry deposits before inspecting in person.",
             postAdTitle = "Post New Listing",
             editAdTitle = "Edit Listing",
             markSoldTitle = "Confirm Sale",
-            markSoldConfirmBody = "Confirm this item is sold? It will move to Sold Archive and increment your deals (+1) toward auto-verification.",
+            markSoldConfirmBody = "Confirm this item is sold? It will move to Sold Archive and increment your completed deals (+1).",
             signInTitle = "Welcome to HATCH",
             signInSubtitle = "Sign in with Google to post listings, negotiate in real time, and sync favorites across devices.",
             signInGoogle = "Continue with Google",
@@ -564,10 +583,10 @@ data class HatchStrings(
             suspendedBannerTitle = "Your account is temporarily suspended",
             suspendedActionBlocked = "Suspended accounts cannot post new ads or send offers until suspension ends.",
             offlineBanner = "Offline — Showing cached marketplace data",
-            verifiedProgressTitle = "Verified Seller Progress (10 clean deals)",
-            boostRewardTitle = "Free Boost Credits",
-            boostRewardSubtitle = "Watch a short sponsored ad to earn +1 credit and feature your listing",
-            watchAdForCredit = "Watch Ad (+1 Credit)",
+            verifiedProgressTitle = "Gold Verification Status (Admin Reviewed)",
+            boostRewardTitle = "Listing Boost Credits",
+            boostRewardSubtitle = "Boost credits are granted by HATCH Administration to feature your ad at the top",
+            watchAdForCredit = "Sponsored Showcase",
             boostListingBtn = "Feature Ad (1 Credit)",
             chatEmptyTitle = "No conversations yet",
             chatEmptySubtitle = "Start negotiating on any item from Market Browse or Swipe Deck.",
@@ -617,7 +636,15 @@ data class HatchStrings(
             guestPromptRateOrReport = "Sign in to HATCH to rate sellers or submit reports.",
             guestPromptGeneral = "Sign in to HATCH to access all buying, selling, and messaging features.",
             guestStorefrontReadOnlyHint = "Guest browsing mode — Sign in to contact or buy from this page",
-            guestDetailSignInToContact = "Sign in to contact the seller or buy"
+            guestDetailSignInToContact = "Sign in to contact the seller or buy",
+            goldBadgeGrantedTitle = "Admin-Verified Gold Badge",
+            goldBadgeAdminDesc = "The Gold Verified Badge is granted exclusively after HATCH Admin review of your account and safety record.",
+            requestGoldVerification = "Request Gold Verification",
+            verificationPendingLabel = "Verification request under Admin review",
+            verificationRejectedLabel = "Previous request declined — submit an update",
+            verificationNoteLabel = "Verification details / business note (min 5 chars) *",
+            verificationDocUrlLabel = "Optional verification document HTTPS URL",
+            submitVerificationBtn = "Submit Verification Request"
         )
     }
 }

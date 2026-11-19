@@ -34,7 +34,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,12 +50,12 @@ import coil.compose.AsyncImage
 import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.HatchFormatters
-import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.PrivateUser
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.ProfileSubTab
 import com.hatch.marketplace.data.model.PublicUser
+import com.hatch.marketplace.data.model.VerificationRequest
 import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.ui.components.BadgePill
@@ -84,12 +83,14 @@ fun ProfileScreen(
     isCurrentlySuspended: Boolean,
     myProducts: List<Product>,
     favoriteProducts: List<Product>,
+    latestVerificationRequest: VerificationRequest? = null,
     activeSubTab: ProfileSubTab,
     language: AppLanguage,
     strings: HatchStrings,
     onSelectSubTab: (ProfileSubTab) -> Unit,
     onOpenAuth: () -> Unit,
     onOpenEditProfile: () -> Unit,
+    onOpenVerificationRequest: () -> Unit = {},
     onOpenOwnBusinessProfile: () -> Unit = {},
     onSignOut: () -> Unit,
     onOpenProduct: (Product) -> Unit,
@@ -200,7 +201,7 @@ fun ProfileScreen(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             Text(publicUser.name, color = HatchTextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Black)
                             if (publicUser.verifiedIdentity) {
-                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchAmber400, modifier = Modifier.size(18.dp))
                             }
                             BadgePill(
                                 text = strings.accountTypeLabel(accountType.wireValue),
@@ -258,23 +259,96 @@ fun ProfileScreen(
                 StatChip("$rewardCredits", if (language == AppLanguage.AR) "رصيد تمييز" else "Credits")
             }
 
-            // 10-Deal Auto-Verification Progress Bar
-            val progress = (publicUser.dealsCompleted.toFloat() / MarketplaceLogic.AUTO_VERIFY_DEALS_THRESHOLD.toFloat()).coerceIn(0f, 1f)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(strings.verifiedProgressTitle, color = HatchTextMuted, fontSize = 11.sp)
-                    Text("${publicUser.dealsCompleted} / 10", color = HatchEmerald400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            // Gold Verification Status & Request Card (Admin-Reviewed)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(HatchCardElevated)
+                    .border(
+                        width = 1.dp,
+                        color = if (publicUser.verifiedIdentity) HatchAmber500.copy(alpha = 0.5f) else HatchBorderDark,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Verified,
+                        contentDescription = null,
+                        tint = if (publicUser.verifiedIdentity) HatchAmber400 else HatchTextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = if (publicUser.verifiedIdentity) strings.goldBadgeGrantedTitle else strings.verifiedProgressTitle,
+                        color = if (publicUser.verifiedIdentity) HatchAmber400 else HatchTextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (publicUser.verifiedIdentity) {
+                        BadgePill(
+                            text = strings.verifiedBadge,
+                            bg = HatchAmber500.copy(alpha = 0.2f),
+                            fg = HatchAmber400
+                        )
+                    }
                 }
-                LinearProgressIndicator(
-                    progress = { progress },
-                    color = HatchEmerald500,
-                    trackColor = HatchBorderDark,
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50))
-                )
+                if (!publicUser.verifiedIdentity) {
+                    Text(
+                        text = strings.goldBadgeAdminDesc,
+                        color = HatchTextMuted,
+                        fontSize = 10.sp
+                    )
+                    when (latestVerificationRequest?.status) {
+                        "pending" -> {
+                            Text(
+                                text = strings.verificationPendingLabel,
+                                color = HatchAmber400,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        "rejected" -> {
+                            val rejReason = latestVerificationRequest.rejectionReason?.takeIf { it.isNotBlank() }
+                            Text(
+                                text = if (rejReason != null) "${strings.verificationRejectedLabel}: $rejReason" else strings.verificationRejectedLabel,
+                                color = HatchRose500,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            OutlinedButton(
+                                onClick = onOpenVerificationRequest,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(strings.requestGoldVerification, color = HatchAmber400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        else -> {
+                            OutlinedButton(
+                                onClick = onOpenVerificationRequest,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(strings.requestGoldVerification, color = HatchAmber400, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Rewarded Boost Card
+        // Boost Credits Card (Spark Admin-Granted)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -300,7 +374,7 @@ fun ProfileScreen(
             ) {
                 Icon(Icons.Rounded.PlayCircle, contentDescription = null, modifier = Modifier.size(15.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("+1", fontWeight = FontWeight.Black, fontSize = 12.sp)
+                Text(if (language == AppLanguage.AR) "مشاهدة" else "Watch", fontWeight = FontWeight.Black, fontSize = 11.sp)
             }
         }
 

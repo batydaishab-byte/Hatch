@@ -63,6 +63,7 @@ import com.hatch.marketplace.ui.modals.SafetyGuideModal
 import com.hatch.marketplace.ui.modals.SellModal
 import com.hatch.marketplace.ui.modals.SoldConfirmDialog
 import com.hatch.marketplace.ui.modals.UserRatingModal
+import com.hatch.marketplace.ui.modals.VerificationRequestDialog
 import com.hatch.marketplace.ui.screens.AdminScreen
 import com.hatch.marketplace.ui.screens.ChatScreen
 import com.hatch.marketplace.ui.screens.FavoritesScreen
@@ -285,7 +286,7 @@ fun HatchMarketplaceRoot(
                                 unreadChatsCount = state.unreadChatsCount,
                                 favoritesCount = state.favoriteIds.size,
                                 isAdmin = state.isAdmin,
-                                adminAlertsCount = state.pendingReportsCount + state.flaggedProductsCount,
+                                adminAlertsCount = state.pendingReportsCount + state.flaggedProductsCount + state.pendingVerificationRequestsCount,
                                 onSelectTab = { viewModel.selectTab(it) },
                                 onSellClick = { viewModel.openSellModal() }
                             )
@@ -350,10 +351,14 @@ fun HatchMarketplaceRoot(
                             activeConversationId = state.activeConversationId,
                             messages = state.activeMessages,
                             products = state.products,
+                            reviews = state.reviews,
                             currentUserId = state.auth.firebaseUser?.uid.orEmpty(),
+                            isCurrentlySuspended = state.isCurrentlySuspended,
                             language = state.language,
                             strings = strings,
                             onSelectConversation = { viewModel.selectConversation(it) },
+                            onOpenProduct = { viewModel.openProductDetail(it) },
+                            onOpenReview = { viewModel.openReviewModal(it) },
                             onSendMessage = { viewModel.sendChatMessage(it) },
                             onSendInspectionPhoto = { uri, url, tag, caption ->
                                 viewModel.sendInspectionPhoto(uri, url, tag, caption)
@@ -380,12 +385,14 @@ fun HatchMarketplaceRoot(
                             isCurrentlySuspended = state.isCurrentlySuspended,
                             myProducts = state.products.filter { it.sellerId == state.auth.firebaseUser?.uid },
                             favoriteProducts = state.favoriteProducts,
+                            latestVerificationRequest = state.myLatestVerificationRequest,
                             activeSubTab = state.profileSubTab,
                             language = state.language,
                             strings = strings,
                             onSelectSubTab = { viewModel.selectProfileSubTab(it) },
                             onOpenAuth = { viewModel.openAuthSheet() },
                             onOpenEditProfile = { viewModel.openEditProfile() },
+                            onOpenVerificationRequest = { viewModel.openVerificationRequestDialog() },
                             onOpenOwnBusinessProfile = {
                                 state.currentUser?.uid?.let { viewModel.openBusinessProfile(it) }
                             },
@@ -408,6 +415,9 @@ fun HatchMarketplaceRoot(
                                     conversations = state.conversations,
                                     users = state.allUsers,
                                     notifications = state.notifications,
+                                    verificationRequests = state.verificationRequests,
+                                    creditTransactions = state.creditTransactions,
+                                    pendingVerificationRequestsCount = state.pendingVerificationRequestsCount,
                                     sponsoredAds = state.sponsoredAds,
                                     adConfig = state.adConfig,
                                     adStats = state.adStats,
@@ -423,6 +433,10 @@ fun HatchMarketplaceRoot(
                                     onSuspendUser = { uid, days, reason -> viewModel.suspendUser(uid, days, reason) },
                                     onUnsuspendUser = { viewModel.unsuspendUser(it) },
                                     onDeleteUser = { viewModel.deleteUserAsAdmin(it) },
+                                    onApproveVerification = { viewModel.approveVerificationRequest(it) },
+                                    onRejectVerification = { req, reason -> viewModel.rejectVerificationRequest(req, reason) },
+                                    onSetUserVerified = { uid, verified, reason -> viewModel.setUserVerificationByAdmin(uid, verified, reason) },
+                                    onGrantCredit = { uid, amount, reason -> viewModel.grantRewardCreditAsAdmin(uid, amount, reason) },
                                     onSendBroadcast = { type, tAr, tEn, bAr, bEn, relId ->
                                         viewModel.sendBroadcast(type, tAr, tEn, bAr, bEn, relId)
                                     },
@@ -453,11 +467,23 @@ fun HatchMarketplaceRoot(
 
         // Modals & Dialogs
         state.selectedProduct?.let { prod ->
+            val currentUid = state.auth.firebaseUser?.uid
+            val eligibleReviewConv = MarketplaceLogic.findEligibleReviewConversation(
+                conversations = state.conversations,
+                products = state.products,
+                reviews = state.reviews,
+                currentUserId = currentUid,
+                sellerId = prod.sellerId,
+                productId = prod.id,
+                isSuspended = state.isCurrentlySuspended
+            )
             ProductDetailSheet(
                 product = prod,
                 isFavorite = state.favoriteIds.contains(prod.id),
-                isOwner = state.auth.firebaseUser?.uid == prod.sellerId,
+                isOwner = currentUid == prod.sellerId,
                 isSignedIn = state.isSignedIn,
+                canRateSeller = eligibleReviewConv != null,
+                eligibleReviewConversationId = eligibleReviewConv?.id,
                 sellerReviews = state.reviews.filter { it.sellerId == prod.sellerId },
                 sponsoredAds = state.sponsoredAds,
                 adConfig = state.adConfig,
@@ -643,6 +669,16 @@ fun HatchMarketplaceRoot(
             )
         }
 
+        if (state.showVerificationRequestDialog && state.currentUser != null) {
+            VerificationRequestDialog(
+                isSubmitting = state.isSubmitting,
+                language = state.language,
+                strings = strings,
+                onDismiss = { viewModel.closeVerificationRequestDialog() },
+                onSubmit = { note, docUrl -> viewModel.submitVerificationRequest(note, docUrl) }
+            )
+        }
+
         state.reviewRequest?.let { req ->
             UserRatingModal(
                 request = req,
@@ -661,7 +697,7 @@ fun HatchMarketplaceRoot(
                 language = state.language,
                 strings = strings,
                 onDismiss = { viewModel.closeReportModal() },
-                onSubmit = { reason, msg, flag -> viewModel.submitReport(reason, msg, flag) }
+                onSubmit = { reason, msg -> viewModel.submitReport(reason, msg) }
             )
         }
 

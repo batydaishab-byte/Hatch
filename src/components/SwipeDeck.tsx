@@ -504,7 +504,7 @@ export const SwipeDeck: React.FC = () => {
                         ★ {(topCard.sellerRating || 4.9).toFixed(1)}
                       </span>
                       {topCard.sellerVerified && (
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
                       )}
                     </div>
                   </div>

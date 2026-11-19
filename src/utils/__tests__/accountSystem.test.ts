@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { Product, resolveAccountType, User } from '../../types';
+import {
+  canTransitionOffer,
+  isAdminUser,
+  isUserSuspendedActive,
+  Product,
+  resolveAccountType,
+  User,
+} from '../../types';
 import {
   applyUserProfileUpdate,
   buildOnboardedUser,
@@ -201,7 +208,43 @@ function runTests() {
   assert.equal(storefront.soldProducts.length, 1);
   assert.equal(storefront.soldProducts[0].id, 'prod_comp_2');
 
-  console.log('ALL ACCOUNT SYSTEM TESTS PASSED (5/5 scenarios verified).');
+  // 6. Security Invariant: Suspension check (active vs expired)
+  assert.equal(isUserSuspendedActive({ status: 'active' }), false);
+  assert.equal(
+    isUserSuspendedActive({ status: 'suspended', suspendedUntilMs: Date.now() + 60_000 }),
+    true
+  );
+  assert.equal(
+    isUserSuspendedActive({ status: 'suspended', suspendedUntilMs: Date.now() - 60_000 }),
+    false
+  );
+
+  // 7. Security Invariant: Server-trusted admin claim check vs forged local role
+  const forgedAdmin: User = { ...personalUser, role: 'admin', hasAdminClaim: false, isAdminDoc: false };
+  assert.equal(isAdminUser(forgedAdmin, true), false);
+  assert.equal(isAdminUser({ ...forgedAdmin, hasAdminClaim: true }, true), true);
+  assert.equal(isAdminUser({ ...forgedAdmin, isAdminDoc: true }, true), true);
+
+  // 8. Security Invariant: Offer state machine transitions
+  assert.equal(canTransitionOffer('none', 'pending', 'buyer_1', 'buyer_1', 'seller_1'), true);
+  assert.equal(canTransitionOffer('none', 'pending', 'seller_1', 'buyer_1', 'seller_1'), false);
+  assert.equal(canTransitionOffer('pending', 'accepted', 'buyer_1', 'buyer_1', 'seller_1'), false);
+  assert.equal(canTransitionOffer('pending', 'accepted', 'seller_1', 'buyer_1', 'seller_1'), true);
+  assert.equal(canTransitionOffer('pending', 'countered', 'seller_1', 'buyer_1', 'seller_1'), true);
+  assert.equal(canTransitionOffer('countered', 'accepted', 'buyer_1', 'buyer_1', 'seller_1'), true);
+  assert.equal(canTransitionOffer('accepted', 'declined', 'seller_1', 'buyer_1', 'seller_1'), false);
+
+  // 9. Security Invariant: Client profile update cannot spoof verifiedIdentity or role or featured
+  const spoofAttempt = applyUserProfileUpdate(
+    { ...personalUser, verifiedIdentity: false, role: 'user', dealsCompleted: 3 },
+    { verifiedIdentity: true, role: 'admin', dealsCompleted: 99, name: 'تعديل' }
+  );
+  assert.equal(spoofAttempt.verifiedIdentity, false);
+  assert.equal(spoofAttempt.role, 'user');
+  assert.equal(spoofAttempt.dealsCompleted, 3);
+  assert.equal(draft1.featured, false);
+
+  console.log('ALL ACCOUNT & SECURITY SYSTEM TESTS PASSED (9/9 scenarios verified).');
 }
 
 runTests();

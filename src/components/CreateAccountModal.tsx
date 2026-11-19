@@ -663,11 +663,11 @@ export const CreateAccountModal: React.FC = () => {
 
             {/* Verification Badge Note */}
             <div className="p-3 rounded-2xl bg-neutral-950/60 border border-neutral-800 text-[11px] text-neutral-400 flex items-center gap-2.5">
-              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
                 {language === 'ar'
-                  ? 'شارة التوثيق الذهبية تظهر تلقائياً بعد إتمام 10 صفقات بيع ناجحة وموثوقة.'
-                  : 'The verified gold badge unlocks automatically after 10 trusted successful deals.'}
+                  ? 'تُمنح شارة التوثيق الذهبية عبر إرسال طلب توثيق من حسابك ومراجعته من إدارة هتش.'
+                  : 'The Gold verified badge is awarded after submitting a request in your Profile and receiving Admin approval.'}
               </span>
             </div>
 

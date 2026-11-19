@@ -41,7 +41,7 @@ import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Replay
-import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -888,9 +888,9 @@ private fun SwipeCardContent(
                     )
                     if (product.sellerVerified) {
                         Icon(
-                            imageVector = Icons.Rounded.VerifiedUser,
+                            imageVector = Icons.Rounded.Verified,
                             contentDescription = strings.verifiedBadge,
-                            tint = HatchEmerald400,
+                            tint = HatchAmber400,
                             modifier = Modifier.size(13.dp)
                         )
                     }

@@ -68,8 +68,8 @@ export const AdMobRewardedModal: React.FC = () => {
 
     showToast(
       language === 'ar'
-        ? 'تهانينا! حصلت على رصيد تمييز إعلان مجاني بعد إكمال مشاهدة إعلان AdMob 🎁'
-        : 'Congratulations! You earned a free ad boost credit after watching AdMob ad 🎁',
+        ? 'تمت مشاهدة الإعلان بنجاح ✓. تُمنح أرصدة تمييز الإعلانات حصرياً عبر اعتماد الإدارة.'
+        : 'Ad viewing completed ✓. Ad boost credits are exclusively awarded by verified Admin grants.',
       'success'
     );
   };
@@ -119,7 +119,7 @@ export const AdMobRewardedModal: React.FC = () => {
             ) : (
               <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{language === 'ar' ? 'تمت المكافأة ✓' : 'Reward Granted ✓'}</span>
+                <span>{language === 'ar' ? 'اكتملت المشاهدة ✓' : 'Completed ✓'}</span>
               </span>
             )}
 
@@ -152,8 +152,8 @@ export const AdMobRewardedModal: React.FC = () => {
               </h4>
               <p className="text-xs text-neutral-400 leading-relaxed">
                 {language === 'ar'
-                  ? `تبقى فقط ${timeLeft} ثوانٍ لتحصل على رصيد تمييز إعلانك مجاناً عبر شبكة AdMob.`
-                  : `Only ${timeLeft}s left to claim your free listing boost credit.`}
+                  ? `تبقى فقط ${timeLeft} ثوانٍ لإكمال معاينة إعلان شبكة AdMob.`
+                  : `Only ${timeLeft}s remaining to finish previewing this AdMob ad.`}
               </p>
               <div className="flex gap-2 pt-2">
                 <button
@@ -218,18 +218,22 @@ export const AdMobRewardedModal: React.FC = () => {
             </p>
           </div>
 
-          {/* Reward Status Card */}
-          <div className="w-full max-w-md p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between text-xs text-amber-300">
+          {/* Boost Credits Policy Info Card */}
+          <div className="w-full max-w-md p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between gap-2 text-xs text-amber-300">
             <div className="flex items-center gap-2">
               <Gift className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
                 {isCompleted
-                  ? (language === 'ar' ? 'تمت إضافة رصيد التمييز لحسابك بنجاح!' : 'Free boost credit added to your account!')
-                  : (language === 'ar' ? 'مكافأة المشاهدة: تمييز إعلانك مجاناً' : 'Reward: Free ad boost badge')}
+                  ? (language === 'ar'
+                      ? 'تمت المشاهدة بنجاح ✓. رصيد التمييز يُمنح فقط عبر الإدارة.'
+                      : 'Viewing completed ✓. Boost credits are granted exclusively by Admin.')
+                  : (language === 'ar'
+                      ? 'إعلان دعائي • رصيد تمييز الإعلانات يُدار من لوحة الإدارة'
+                      : 'Sponsored Ad • Boost credits are managed by Admin')}
               </span>
             </div>
-            <span className="font-mono font-bold text-white bg-amber-500/20 px-2 py-0.5 rounded">
-              +1 Credit
+            <span className="font-mono font-bold text-white bg-amber-500/20 px-2 py-0.5 rounded shrink-0">
+              {rewardCredits}
             </span>
           </div>
         </div>
@@ -249,7 +253,7 @@ export const AdMobRewardedModal: React.FC = () => {
               onClick={closeRewardedAd}
               className="py-3 px-5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm transition-all cursor-pointer"
             >
-              {language === 'ar' ? 'استلام وإغلاق' : 'Claim & Close'}
+              {language === 'ar' ? 'إغلاق' : 'Done & Close'}
             </button>
           )}
         </div>

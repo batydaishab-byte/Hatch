@@ -39,6 +39,7 @@ const MainContent: React.FC = () => {
     setIsSellModalOpen, 
     isApkModalOpen, 
     setIsApkModalOpen, 
+    isAdmin,
     t, 
     language 
   } = useApp();
@@ -58,7 +59,7 @@ const MainContent: React.FC = () => {
         return <ProfileView />;
 
       case 'admin':
-        return <AdminView />;
+        return isAdmin ? <AdminView /> : <SwipeDeck />;
 
       case 'favorites': {
         const savedList = products.filter((p) => favorites.includes(p.id));

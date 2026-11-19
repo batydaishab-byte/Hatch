@@ -13,6 +13,7 @@ import com.hatch.marketplace.data.model.AdminSubTab
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.ChatMessage
 import com.hatch.marketplace.data.model.Conversation
+import com.hatch.marketplace.data.model.CreditTransaction
 import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.MainTab
 import com.hatch.marketplace.data.model.MarketFilterState
@@ -28,6 +29,7 @@ import com.hatch.marketplace.data.model.SponsoredAdItem
 import com.hatch.marketplace.data.model.ToastType
 import com.hatch.marketplace.data.model.UiToast
 import com.hatch.marketplace.data.model.UserReview
+import com.hatch.marketplace.data.model.VerificationRequest
 import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.data.network.NetworkMonitor
 import com.hatch.marketplace.data.repository.AuthRepository
@@ -65,6 +67,7 @@ data class ReviewRequest(
     val sellerName: String,
     val sellerAvatar: String = "",
     val productId: String? = null,
+    val conversationId: String? = null,
     val productTitle: String? = null
 )
 
@@ -89,6 +92,8 @@ data class HatchUiState(
     val reports: List<ReportTicket> = emptyList(),
     val allUsers: List<PublicUser> = emptyList(),
     val commercialProfiles: List<PublicUser> = emptyList(),
+    val verificationRequests: List<VerificationRequest> = emptyList(),
+    val creditTransactions: List<CreditTransaction> = emptyList(),
     val sponsoredAds: List<SponsoredAdItem> = emptyList(),
     val adConfig: AdMobConfig = AdMobConfig(),
     val cloudinaryQuota: CloudinaryQuotaStatus = CloudinaryQuotaStatus(),
@@ -112,6 +117,7 @@ data class HatchUiState(
     val forceOnboardingStep: Boolean = false,
     val authErrorMessage: String? = null,
     val showEditProfileDialog: Boolean = false,
+    val showVerificationRequestDialog: Boolean = false,
     val showNotificationsModal: Boolean = false,
     val showSafetyGuideModal: Boolean = false,
     val showNativeInfoDialog: Boolean = false,
@@ -136,7 +142,7 @@ data class HatchUiState(
 
     val isCurrentlySuspended: Boolean
         get() = currentUser?.let {
-            MarketplaceLogic.isUserSuspended(it.status, it.suspendedUntil)
+            MarketplaceLogic.isUserSuspended(it.status, it.suspendedUntil, it.suspendedUntilTs)
         } ?: false
 
     val filteredMarketProducts: List<Product>
@@ -165,6 +171,15 @@ data class HatchUiState(
 
     val pendingReportsCount: Int
         get() = reports.count { it.status == "pending" }
+
+    val pendingVerificationRequestsCount: Int
+        get() = verificationRequests.count { it.status == "pending" }
+
+    val myLatestVerificationRequest: VerificationRequest?
+        get() {
+            val uid = auth.firebaseUser?.uid ?: return null
+            return verificationRequests.firstOrNull { it.uid == uid }
+        }
 
     val flaggedProductsCount: Int
         get() = products.count { it.status == ProductStatus.FLAGGED.wireValue }
@@ -195,7 +210,7 @@ class HatchMainViewModel @Inject constructor(
     private val authSessionFlow = authRepo.observeAuthSession()
 
     private val productsFlow = authSessionFlow.flatMapLatest { session ->
-        productRepo.observeProducts(session.firebaseUser?.uid, session.isVerifiedAdminEmail)
+        productRepo.observeProducts(session.firebaseUser?.uid, session.hasAdminClaim)
     }
 
     private val favoritesFlow = authSessionFlow.flatMapLatest { session ->
@@ -203,7 +218,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     private val conversationsFlow = authSessionFlow.flatMapLatest { session ->
-        chatRepo.observeConversations(session.firebaseUser?.uid, session.isVerifiedAdminEmail)
+        chatRepo.observeConversations(session.firebaseUser?.uid, session.hasAdminClaim)
     }
 
     private val activeMessagesFlow = _activeConversationId.flatMapLatest { convId ->
@@ -217,19 +232,27 @@ class HatchMainViewModel @Inject constructor(
     private val reviewsFlow = interactionRepo.observeReviews()
 
     private val reportsFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeReports(session.firebaseUser?.uid, session.isVerifiedAdminEmail)
+        interactionRepo.observeReports(session.firebaseUser?.uid, session.hasAdminClaim)
+    }
+
+    private val verificationRequestsFlow = authSessionFlow.flatMapLatest { session ->
+        interactionRepo.observeVerificationRequests(session.firebaseUser?.uid, session.hasAdminClaim)
+    }
+
+    private val creditTransactionsFlow = authSessionFlow.flatMapLatest { session ->
+        interactionRepo.observeCreditTransactions(session.firebaseUser?.uid, session.hasAdminClaim)
     }
 
     private val usersFlow = authSessionFlow.flatMapLatest { session ->
-        authRepo.observePublicUsers(session.firebaseUser != null, session.isVerifiedAdminEmail)
+        authRepo.observePublicUsers(session.firebaseUser != null, session.hasAdminClaim)
     }
 
     private val commercialProfilesFlow = authSessionFlow.flatMapLatest { session ->
-        authRepo.observeCommercialProfiles(session.isVerifiedAdminEmail)
+        authRepo.observeCommercialProfiles(session.hasAdminClaim)
     }
 
     private val sponsoredAdsFlow = authSessionFlow.flatMapLatest { session ->
-        monetizationRepo.observeSponsoredAds(session.isVerifiedAdminEmail)
+        monetizationRepo.observeSponsoredAds(session.hasAdminClaim)
     }
 
     private val adConfigFlow = authSessionFlow.flatMapLatest { session ->
@@ -244,12 +267,18 @@ class HatchMainViewModel @Inject constructor(
         val activeMessages: List<ChatMessage>
     )
 
+    private data class LedgerStreams(
+        val verificationRequests: List<VerificationRequest>,
+        val creditTransactions: List<CreditTransaction>
+    )
+
     private data class MetaStreams(
         val notifications: List<NotificationItem>,
         val reviews: List<UserReview>,
         val reports: List<ReportTicket>,
         val usersAndCommercial: Pair<List<PublicUser>, List<PublicUser>>,
-        val ads: List<SponsoredAdItem>
+        val ads: List<SponsoredAdItem>,
+        val ledger: LedgerStreams
     )
 
     private data class SettingsStreams(
@@ -277,14 +306,28 @@ class HatchMainViewModel @Inject constructor(
         users to commercial
     }
 
+    private val ledgerCombinedFlow = combine(
+        verificationRequestsFlow,
+        creditTransactionsFlow
+    ) { vReqs, creditTxs ->
+        LedgerStreams(vReqs, creditTxs)
+    }
+
+    private val adsAndLedgerFlow = combine(
+        sponsoredAdsFlow,
+        ledgerCombinedFlow
+    ) { ads, ledger ->
+        ads to ledger
+    }
+
     private val metaCombined = combine(
         notificationsFlow,
         reviewsFlow,
         reportsFlow,
         usersCombinedFlow,
-        sponsoredAdsFlow
-    ) { notifs, reviews, reports, usersPair, ads ->
-        MetaStreams(notifs, reviews, reports, usersPair, ads)
+        adsAndLedgerFlow
+    ) { notifs, reviews, reports, usersPair, adsPair ->
+        MetaStreams(notifs, reviews, reports, usersPair, adsPair.first, adsPair.second)
     }
 
     private val effectiveLanguageFlow = combine(
@@ -334,7 +377,7 @@ class HatchMainViewModel @Inject constructor(
                     sellerAccountType = liveSeller.accountType,
                     sellerBusinessActivity = liveSeller.businessActivity ?: p.sellerBusinessActivity,
                     sellerDealsCount = maxOf(p.sellerDealsCount, liveSeller.dealsCompleted),
-                    sellerVerified = p.sellerVerified || liveSeller.verifiedIdentity
+                    sellerVerified = liveSeller.verifiedIdentity
                 )
             } else if (sellerReviews.isNotEmpty()) {
                 p.copy(sellerRating = avgRating)
@@ -357,6 +400,8 @@ class HatchMainViewModel @Inject constructor(
             reports = meta.reports,
             allUsers = publicUsers,
             commercialProfiles = commercialProfiles,
+            verificationRequests = meta.ledger.verificationRequests,
+            creditTransactions = meta.ledger.creditTransactions,
             sponsoredAds = meta.ads,
             adConfig = settings.adConfig,
             filter = local.filter.copy(selectedCity = settings.selectedCity),
@@ -622,6 +667,7 @@ class HatchMainViewModel @Inject constructor(
         businessActivity: String = "",
         businessLogo: String = ""
     ) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         val previousType = AccountType.fromWire(uiState.value.currentUser?.accountType)
         val nextType = AccountType.fromWire(accountType)
@@ -721,23 +767,22 @@ class HatchMainViewModel @Inject constructor(
 
     fun browseNextSwipeCard(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
+        if (uiState.value.isCurrentlySuspended) return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch { interactionRepo.recordSwipe(uid, product.id, "right") }
     }
 
     fun swipeLeft(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
+        if (uiState.value.isCurrentlySuspended) return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch { interactionRepo.recordSwipe(uid, product.id, "left") }
     }
 
     fun swipeRight(product: Product) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.FAVORITES)) return
+        val uid = uiState.value.auth.firebaseUser?.uid ?: return
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
-        val uid = uiState.value.auth.firebaseUser?.uid
-        if (uid == null) {
-            requestGuestPrompt(GuestPromptReason.FAVORITES)
-            return
-        }
         viewModelScope.launch {
             interactionRepo.recordSwipe(uid, product.id, "right")
             if (!uiState.value.favoriteIds.contains(product.id)) {
@@ -755,11 +800,8 @@ class HatchMainViewModel @Inject constructor(
     fun resetSwipeDeck() { _localState.update { it.copy(passedProductIds = emptySet()) } }
 
     fun toggleFavorite(productId: String) {
-        val uid = uiState.value.auth.firebaseUser?.uid
-        if (uid == null) {
-            requestGuestPrompt(GuestPromptReason.FAVORITES)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.FAVORITES)) return
+        val uid = uiState.value.auth.firebaseUser?.uid ?: return
         val currentlyFav = uiState.value.favoriteIds.contains(productId)
         viewModelScope.launch {
             interactionRepo.toggleFavorite(uid, productId, currentlyFav)
@@ -890,19 +932,12 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             setSubmitting(true)
             productRepo.markProductAsSold(target.id, uid)
-                .onSuccess { newlyVerified ->
+                .onSuccess {
                     _localState.update { it.copy(soldTargetProduct = null, selectedProduct = null) }
-                    if (newlyVerified) {
-                        showToast(
-                            if (isArabic()) "مبروك! أكملت 10 صفقات وتم توثيق حسابك تلقائياً ✨" else "Congrats! 10 deals completed — Account Verified ✨",
-                            ToastType.SUCCESS
-                        )
-                    } else {
-                        showToast(
-                            if (isArabic()) "تم أرشفة الإعلان كمباع (+1 صفقة ناجحة)" else "Marked as Sold (+1 deal)",
-                            ToastType.SUCCESS
-                        )
-                    }
+                    showToast(
+                        if (isArabic()) "تم أرشفة الإعلان كمباع (+1 صفقة ناجحة)" else "Marked as Sold (+1 deal)",
+                        ToastType.SUCCESS
+                    )
                 }
                 .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
             setSubmitting(false)
@@ -956,10 +991,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun startChatWithSeller(product: Product) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val buyer = uiState.value.currentUser ?: return
         if (buyer.uid == product.sellerId) {
             showToast(if (isArabic()) "هذا هو إعلانك الخاص" else "This is your own listing", ToastType.INFO)
@@ -984,6 +1016,7 @@ class HatchMainViewModel @Inject constructor(
     fun selectConversation(conv: Conversation?) {
         _activeConversationId.value = conv?.id
         _localState.update { it.copy(activeConversationId = conv?.id) }
+        if (uiState.value.isCurrentlySuspended) return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         if (conv != null) {
             viewModelScope.launch {
@@ -993,10 +1026,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendChatMessage(text: String) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -1006,10 +1036,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendInspectionPhoto(uri: Uri?, directUrl: String?, tag: String, caption: String) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -1029,10 +1056,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendVoiceNote(audioUrl: String, durationSeconds: Int) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -1042,10 +1066,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun respondToOffer(status: OfferStatus, counterAmount: Double? = null) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
         val conv = currentActiveConversation() ?: return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
@@ -1056,20 +1077,56 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun openReviewModal(request: ReviewRequest) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
+        if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
+        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        if (request.sellerId == uid) {
+            showToast(if (isArabic()) "لا يمكنك تقييم حسابك الشخصي" else "You cannot review your own account", ToastType.WARNING)
             return
         }
-        _localState.update { it.copy(reviewRequest = request) }
+        val alreadyReviewedSpecific = request.productId != null &&
+            MarketplaceLogic.hasBuyerAlreadyReviewedProduct(uiState.value.reviews, uid, request.productId)
+        if (alreadyReviewedSpecific) {
+            showToast(
+                if (isArabic()) "لقد قمت بتقييم هذه الصفقة مسبقاً" else "You have already reviewed this completed deal",
+                ToastType.INFO
+            )
+            return
+        }
+        val completedConv = MarketplaceLogic.findEligibleReviewConversation(
+            conversations = uiState.value.conversations,
+            products = uiState.value.products,
+            reviews = uiState.value.reviews,
+            currentUserId = uid,
+            sellerId = request.sellerId,
+            productId = request.productId,
+            isSuspended = uiState.value.isCurrentlySuspended
+        )
+        if (completedConv == null) {
+            showToast(
+                if (isArabic()) {
+                    "يتاح التقييم بعد قبول عرضك وإتمام بيع المنتج عبر المحادثة"
+                } else {
+                    "Rating unlocks after your offer is accepted and the sale is marked sold"
+                },
+                ToastType.INFO
+            )
+            return
+        }
+        _localState.update {
+            it.copy(
+                reviewRequest = request.copy(
+                    productId = completedConv.productId,
+                    conversationId = completedConv.id,
+                    productTitle = request.productTitle ?: completedConv.productTitle
+                )
+            )
+        }
     }
 
     fun closeReviewModal() { _localState.update { it.copy(reviewRequest = null) } }
 
     fun submitReview(rating: Int, comment: String, tags: List<String>) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val req = uiState.value.reviewRequest ?: return
         val reviewer = uiState.value.currentUser ?: return
         viewModelScope.launch {
@@ -1083,6 +1140,7 @@ class HatchMainViewModel @Inject constructor(
                 comment = comment,
                 tags = tags,
                 productId = req.productId,
+                conversationId = req.conversationId,
                 productTitle = req.productTitle
             ).onSuccess {
                 _localState.update { it.copy(reviewRequest = null) }
@@ -1093,20 +1151,14 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun openReportModal(request: ReportRequest) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
-            return
-        }
+        if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         _localState.update { it.copy(reportRequest = request) }
     }
 
     fun closeReportModal() { _localState.update { it.copy(reportRequest = null) } }
 
-    fun submitReport(reason: String, message: String, flagListing: Boolean) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.RATE_OR_REPORT)
-            return
-        }
+    fun submitReport(reason: String, message: String) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val req = uiState.value.reportRequest ?: return
         val reporter = uiState.value.currentUser ?: return
         viewModelScope.launch {
@@ -1119,8 +1171,7 @@ class HatchMainViewModel @Inject constructor(
                 reportedProductId = req.productId,
                 reportedProductTitle = req.productTitle,
                 reason = reason,
-                message = message,
-                flagListing = flagListing
+                message = message
             ).onSuccess {
                 _localState.update { it.copy(reportRequest = null) }
                 showToast(if (isArabic()) "تم إرسال البلاغ للإدارة بنجاح" else "Report sent to Admin", ToastType.SUCCESS)
@@ -1140,6 +1191,7 @@ class HatchMainViewModel @Inject constructor(
 
     fun markAllNotificationsRead() {
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        if (uiState.value.isCurrentlySuspended) return
         val allIds = uiState.value.notifications.map { it.id }.toSet()
         _localState.update { it.copy(readBroadcastIds = it.readBroadcastIds + allIds) }
         viewModelScope.launch {
@@ -1159,11 +1211,32 @@ class HatchMainViewModel @Inject constructor(
     }
     fun closeEditProfile() { _localState.update { it.copy(showEditProfileDialog = false) } }
 
-    fun launchRewardedAdForCredit(targetProductId: String? = null) {
-        if (!uiState.value.isSignedIn) {
-            requestGuestPrompt(GuestPromptReason.GENERAL)
-            return
+    fun openVerificationRequestDialog() {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
+        _localState.update { it.copy(showVerificationRequestDialog = true) }
+    }
+    fun closeVerificationRequestDialog() { _localState.update { it.copy(showVerificationRequestDialog = false) } }
+
+    fun submitVerificationRequest(note: String, documentUrl: String? = null) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
+        val user = uiState.value.currentUser ?: return
+        viewModelScope.launch {
+            setSubmitting(true)
+            interactionRepo.submitVerificationRequest(user, note, documentUrl)
+                .onSuccess {
+                    _localState.update { it.copy(showVerificationRequestDialog = false) }
+                    showToast(
+                        if (isArabic()) "تم إرسال طلب التوثيق الذهبي للمراجعة ✅" else "Gold verification request submitted ✅",
+                        ToastType.SUCCESS
+                    )
+                }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Verification request failed", ToastType.ERROR) }
+            setSubmitting(false)
         }
+    }
+
+    fun launchRewardedAdForCredit(targetProductId: String? = null) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
         val ad = uiState.value.sponsoredAds.firstOrNull {
             it.isActive && (it.format == "rewarded" || it.format == "all")
         } ?: uiState.value.sponsoredAds.firstOrNull { it.isActive }
@@ -1172,8 +1245,8 @@ class HatchMainViewModel @Inject constructor(
             titleAr = "شركاء هتش الموثوقون",
             titleEn = "HATCH Trusted Partners",
             advertiser = "HATCH Sudan",
-            descriptionAr = "شاهد الإعلان كاملاً للحصول على رصيد تمييز مجاني لإعلاناتك",
-            descriptionEn = "Watch the full ad to earn +1 free listing boost credit",
+            descriptionAr = "شاهد الإعلان الترويجي — تُمنح أرصدة التمييز رسمياً من إدارة هتش",
+            descriptionEn = "Sponsored showcase — boost credits are granted officially by HATCH Admin",
             durationSeconds = uiState.value.adConfig.rewardedDurationSeconds
         )
         _localState.update { it.copy(showRewardedAd = ad, rewardBoostTargetProductId = targetProductId) }
@@ -1181,25 +1254,23 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun completeRewardedAd() {
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
         val boostProductId = uiState.value.rewardBoostTargetProductId
+        val credits = uiState.value.auth.privateProfile?.rewardCredits ?: 0
         _localState.update { it.copy(showRewardedAd = null, rewardBoostTargetProductId = null) }
-        viewModelScope.launch {
-            authRepo.adjustRewardCredits(uid, +1).onSuccess {
-                if (boostProductId != null) {
-                    productRepo.featureProductWithCredit(boostProductId, uid).onSuccess {
-                        showToast(if (isArabic()) "تم تمييز إعلانك في أعلى السوق ⭐" else "Listing featured ⭐", ToastType.SUCCESS)
-                    }
-                } else {
-                    showToast(if (isArabic()) "حصلت على +1 رصيد تمييز مجاني 🎉" else "Earned +1 boost credit 🎉", ToastType.SUCCESS)
-                }
-            }
+        if (boostProductId != null && credits >= 1) {
+            boostListingWithExistingCredit(boostProductId)
+        } else {
+            showToast(
+                if (isArabic()) "شكراً للمشاهدة — تُمنح أرصدة التمييز من إدارة هتش" else "Thanks for watching — boost credits are granted by HATCH Admin",
+                ToastType.INFO
+            )
         }
     }
 
     fun dismissRewardedAd() { _localState.update { it.copy(showRewardedAd = null, rewardBoostTargetProductId = null) } }
 
     fun boostListingWithExistingCredit(productId: String) {
+        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         val uid = uiState.value.auth.firebaseUser?.uid ?: return
         viewModelScope.launch {
             productRepo.featureProductWithCredit(productId, uid)
@@ -1210,14 +1281,22 @@ class HatchMainViewModel @Inject constructor(
 
     fun dismissInterstitialAd() { _localState.update { it.copy(showInterstitialAd = null) } }
     fun testShowInterstitial() {
+        if (!requireAdminOrDeny()) return
         val ad = uiState.value.sponsoredAds.firstOrNull() ?: return
         _localState.update { it.copy(showInterstitialAd = ad) }
     }
 
-    fun recordAdImpression(adId: String) { viewModelScope.launch { monetizationRepo.recordImpression(adId) } }
-    fun recordAdClick(adId: String) { viewModelScope.launch { monetizationRepo.recordClick(adId) } }
+    fun recordAdImpression(adId: String) {
+        if (!uiState.value.isSignedIn || uiState.value.isCurrentlySuspended) return
+        viewModelScope.launch { monetizationRepo.recordImpression(adId) }
+    }
+    fun recordAdClick(adId: String) {
+        if (!uiState.value.isSignedIn || uiState.value.isCurrentlySuspended) return
+        viewModelScope.launch { monetizationRepo.recordClick(adId) }
+    }
 
     fun openAdminConversationAudit(conversation: Conversation) {
+        if (!requireAdminOrDeny()) return
         _localState.update { it.copy(adminAuditConversation = conversation) }
         _activeConversationId.value = conversation.id
     }
@@ -1228,6 +1307,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun sendBroadcast(type: String, titleAr: String, titleEn: String, bodyAr: String, bodyEn: String, relatedProductId: String?) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             setSubmitting(true)
             monetizationRepo.sendBroadcastNotification(type, titleAr, titleEn, bodyAr, bodyEn, relatedProductId)
@@ -1238,27 +1318,34 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun updateReportStatus(reportId: String, status: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.updateReportStatus(reportId, status)
                 .onSuccess { showToast(if (isArabic()) "تم تحديث حالة البلاغ" else "Report updated", ToastType.SUCCESS) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
         }
     }
 
     fun approveFlaggedProduct(productId: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.approveFlaggedProduct(productId)
                 .onSuccess { showToast(if (isArabic()) "تمت إعادة تفعيل الإعلان" else "Listing restored", ToastType.SUCCESS) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
         }
     }
 
     fun deleteProductAsAdmin(productId: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             productRepo.deleteProduct(productId)
                 .onSuccess { showToast(if (isArabic()) "تم حذف الإعلان" else "Listing deleted", ToastType.INFO) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
         }
     }
 
     fun suspendUser(uid: String, days: Int, reason: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.suspendUser(uid, days, reason)
                 .onSuccess { showToast(if (isArabic()) "تم إيقاف الحساب وإخطار المستخدم" else "User suspended", ToastType.WARNING) }
@@ -1267,20 +1354,81 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun unsuspendUser(uid: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.unsuspendUser(uid)
                 .onSuccess { showToast(if (isArabic()) "تم فك الحظر عن الحساب" else "User unsuspended", ToastType.SUCCESS) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+        }
+    }
+
+    fun approveVerificationRequest(request: VerificationRequest) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch {
+            setSubmitting(true)
+            authRepo.approveVerificationRequest(request)
+                .onSuccess { showToast(if (isArabic()) "تم اعتماد التوثيق الذهبي بنجاح ⭐" else "Gold badge approved ⭐", ToastType.SUCCESS) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+            setSubmitting(false)
+        }
+    }
+
+    fun rejectVerificationRequest(request: VerificationRequest, reason: String) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch {
+            setSubmitting(true)
+            authRepo.rejectVerificationRequest(request, reason)
+                .onSuccess { showToast(if (isArabic()) "تم رفض طلب التوثيق وإشعار المستخدم" else "Verification rejected", ToastType.INFO) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+            setSubmitting(false)
+        }
+    }
+
+    fun setUserVerificationByAdmin(uid: String, verified: Boolean, reason: String = "") {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch {
+            authRepo.setUserVerificationStatus(uid, verified, reason)
+                .onSuccess {
+                    showToast(
+                        if (verified) {
+                            if (isArabic()) "تم توثيق الحساب بالشارة الذهبية ⭐" else "Gold badge granted ⭐"
+                        } else {
+                            if (isArabic()) "تمت إزالة شارة التوثيق" else "Verification revoked"
+                        },
+                        ToastType.SUCCESS
+                    )
+                }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+        }
+    }
+
+    fun grantRewardCreditAsAdmin(uid: String, amount: Int, reason: String) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch {
+            setSubmitting(true)
+            authRepo.grantRewardCredit(uid, amount, reason)
+                .onSuccess { newBal ->
+                    showToast(
+                        if (isArabic()) "تم منح +$amount رصيد تمييز (الرصيد الجديد: $newBal)" else "Granted +$amount credits (balance: $newBal)",
+                        ToastType.SUCCESS
+                    )
+                }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Credit grant failed", ToastType.ERROR) }
+            setSubmitting(false)
         }
     }
 
     fun deleteUserAsAdmin(uid: String) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.deleteUserAsAdmin(uid)
                 .onSuccess { showToast(if (isArabic()) "تم حذف بيانات الحساب" else "User removed", ToastType.INFO) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
         }
     }
 
     fun createSponsoredAd(ad: SponsoredAdItem) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             setSubmitting(true)
             monetizationRepo.createSponsoredAd(ad)
@@ -1290,18 +1438,30 @@ class HatchMainViewModel @Inject constructor(
         }
     }
 
-    fun toggleAdActive(adId: String, active: Boolean) { viewModelScope.launch { monetizationRepo.toggleAdActive(adId, active) } }
-    fun updateAdDuration(adId: String, seconds: Int) { viewModelScope.launch { monetizationRepo.updateAdDuration(adId, seconds) } }
-    fun deleteAd(adId: String) { viewModelScope.launch { monetizationRepo.deleteAd(adId) } }
+    fun toggleAdActive(adId: String, active: Boolean) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch { monetizationRepo.toggleAdActive(adId, active) }
+    }
+    fun updateAdDuration(adId: String, seconds: Int) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch { monetizationRepo.updateAdDuration(adId, seconds) }
+    }
+    fun deleteAd(adId: String) {
+        if (!requireAdminOrDeny()) return
+        viewModelScope.launch { monetizationRepo.deleteAd(adId) }
+    }
 
     fun updateAdConfig(config: AdMobConfig) {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.updateAdConfig(config)
                 .onSuccess { showToast(if (isArabic()) "تم حفظ إعدادات الإعلانات" else "Ad config saved", ToastType.SUCCESS) }
+                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
         }
     }
 
     fun resetAdStats() {
+        if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.resetAllAdStats(uiState.value.sponsoredAds)
                 .onSuccess { showToast(if (isArabic()) "تم تصفير عدادات الإعلانات" else "Ad stats reset", ToastType.INFO) }
@@ -1309,10 +1469,19 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun refreshCloudinaryQuota() {
+        if (!uiState.value.isAdmin) return
         viewModelScope.launch {
             val status = monetizationRepo.fetchAdminQuotaStatus(uiState.value.isAdmin)
             _localState.update { it.copy(cloudinaryQuota = status) }
         }
+    }
+
+    private fun requireAdminOrDeny(): Boolean {
+        if (!uiState.value.isAdmin) {
+            showToast(if (isArabic()) "صلاحية إدارية مطلوبة" else "Admin authorization required", ToastType.ERROR)
+            return false
+        }
+        return true
     }
 
     fun showToast(message: String, type: ToastType = ToastType.INFO) {

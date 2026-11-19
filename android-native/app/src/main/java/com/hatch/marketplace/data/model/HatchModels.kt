@@ -31,6 +31,7 @@ enum class ProfileSubTab {
 
 enum class AdminSubTab {
     REPORTS,
+    VERIFICATION,
     BROADCAST,
     SOLD,
     CONVERSATIONS,
@@ -238,8 +239,10 @@ data class PublicUser(
     val verifiedIdentity: Boolean = false,
     val status: String = UserStatus.ACTIVE.wireValue,
     val suspendedUntil: String? = null,
+    val suspendedUntilTs: Timestamp? = null,
     val suspensionDays: Int? = null,
     val suspensionReason: String? = null,
+    val lastSoldProductId: String? = null,
     val accountType: String = AccountType.PERSONAL.wireValue,
     val businessActivity: String? = null,
     val businessLogo: String? = null,
@@ -258,6 +261,7 @@ data class PrivateUser(
     val phone: String = "",
     val role: String = "user",
     val rewardCredits: Int = 0,
+    val lastCreditTxId: String? = null,
     val fcmTokens: List<String> = emptyList(),
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
@@ -291,6 +295,7 @@ data class Product(
     val deliveryAvailable: Boolean = false,
     val urgentSale: Boolean = false,
     val featured: Boolean = false,
+    val featuredTxId: String? = null,
     val viewsCount: Int = 0,
     val likesCount: Int = 0,
     val status: String = ProductStatus.ACTIVE.wireValue,
@@ -299,6 +304,13 @@ data class Product(
 )
 
 fun Product.resolvedSellerAccountType(): AccountType = AccountType.fromWire(sellerAccountType)
+
+enum class OfferTransitionAction {
+    SUBMIT_OFFER,
+    COUNTER_OFFER,
+    ACCEPT_OFFER,
+    DECLINE_OFFER
+}
 
 data class Conversation(
     val id: String = "",
@@ -319,8 +331,42 @@ data class Conversation(
     val offerAmount: Double? = null,
     val counterAmount: Double? = null,
     val offerStatus: String = OfferStatus.NONE.wireValue,
+    val offerUpdatedBy: String? = null,
+    val acceptedBy: String? = null,
+    val acceptedAt: Timestamp? = null,
+    val offerHistory: List<Map<String, Any>> = emptyList(),
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
+)
+
+data class VerificationRequest(
+    val id: String = "",
+    val uid: String = "",
+    val userName: String = "",
+    val userAvatar: String = "",
+    val accountType: String = AccountType.PERSONAL.wireValue,
+    val city: String = "",
+    val note: String = "",
+    val documentUrl: String? = null,
+    val status: String = "pending",
+    val reviewedBy: String? = null,
+    val rejectionReason: String? = null,
+    val createdAt: Timestamp? = null,
+    val updatedAt: Timestamp? = null,
+    val reviewedAt: Timestamp? = null
+)
+
+data class CreditTransaction(
+    val id: String = "",
+    val uid: String = "",
+    val type: String = "",
+    val amount: Int = 0,
+    val balanceBefore: Int = 0,
+    val balanceAfter: Int = 0,
+    val productId: String? = null,
+    val grantedBy: String? = null,
+    val reason: String = "",
+    val createdAt: Timestamp? = null
 )
 
 data class ChatMessage(
@@ -347,6 +393,7 @@ data class UserReview(
     val comment: String = "",
     val tags: List<String> = emptyList(),
     val productId: String? = null,
+    val conversationId: String? = null,
     val productTitle: String? = null,
     val createdAt: Timestamp? = null
 )
@@ -521,25 +568,28 @@ object HatchFormatters {
 }
 
 object MarketplaceLogic {
-    const val AUTO_VERIFY_DEALS_THRESHOLD = 10
-
-    fun shouldAutoVerify(dealsCompleted: Int, reportsCount: Int): Boolean =
-        dealsCompleted >= AUTO_VERIFY_DEALS_THRESHOLD && reportsCount == 0
-
-    fun isAdminRole(role: String?, email: String?): Boolean {
-        val normalizedEmail = email?.trim()?.lowercase(Locale.ROOT)
-        return role == "admin" || normalizedEmail == "batydaishab@gmail.com"
-    }
+    fun isAdminRole(hasAdminClaim: Boolean, hasAdminDoc: Boolean = false): Boolean =
+        hasAdminClaim || hasAdminDoc
 
     fun isUserSuspended(
         status: String,
         suspendedUntilIso: String?,
+        suspendedUntilTs: Timestamp? = null,
         nowMillis: Long = System.currentTimeMillis()
     ): Boolean {
         if (status != UserStatus.SUSPENDED.wireValue) return false
+        if (suspendedUntilTs != null) {
+            return suspendedUntilTs.toDate().time > nowMillis
+        }
         if (suspendedUntilIso.isNullOrBlank()) return true
         val expiryMillis = parseIsoTimestampMillis(suspendedUntilIso) ?: return true
         return expiryMillis > nowMillis
+    }
+
+    fun buildSuspensionEndTimestamp(days: Int, nowMillis: Long = System.currentTimeMillis()): Timestamp {
+        val safeDays = days.coerceIn(1, 3650)
+        val endMillis = nowMillis + safeDays * 86_400_000L
+        return Timestamp(Date(endMillis))
     }
 
     fun buildSuspensionEndIso(days: Int, nowMillis: Long = System.currentTimeMillis()): String {
@@ -550,6 +600,74 @@ object MarketplaceLogic {
         }
         return fmt.format(Date(endMillis))
     }
+
+    fun isProductEligibleForOffers(productStatus: String): Boolean =
+        productStatus == ProductStatus.ACTIVE.wireValue
+
+    fun validateOfferTransition(
+        currentStatus: String,
+        actorUid: String,
+        buyerId: String,
+        sellerId: String,
+        action: OfferTransitionAction,
+        amount: Double? = null,
+        productStatus: String = ProductStatus.ACTIVE.wireValue
+    ): Result<OfferStatus> = runCatching {
+        require(actorUid == buyerId || actorUid == sellerId) {
+            "Only conversation participants can update offers."
+        }
+        require(isProductEligibleForOffers(productStatus)) {
+            "Offers are only allowed on active listings."
+        }
+        require(currentStatus != OfferStatus.ACCEPTED.wireValue) {
+            "Offer has already been accepted and is locked."
+        }
+
+        when (action) {
+            OfferTransitionAction.SUBMIT_OFFER -> {
+                require(actorUid == buyerId) { "Only the buyer can submit an offer." }
+                require(amount != null && amount > 0.0) { "Offer amount must be positive." }
+                OfferStatus.PENDING
+            }
+            OfferTransitionAction.COUNTER_OFFER -> {
+                require(actorUid == sellerId) { "Only the seller can send a counter offer." }
+                require(currentStatus == OfferStatus.PENDING.wireValue) {
+                    "Counter offer is only allowed on a pending buyer offer."
+                }
+                require(amount != null && amount > 0.0) { "Counter amount must be positive." }
+                OfferStatus.COUNTERED
+            }
+            OfferTransitionAction.ACCEPT_OFFER -> {
+                val allowed = (actorUid == sellerId && currentStatus == OfferStatus.PENDING.wireValue) ||
+                    (actorUid == buyerId && currentStatus == OfferStatus.COUNTERED.wireValue)
+                require(allowed) { "You cannot accept the offer in its current state." }
+                OfferStatus.ACCEPTED
+            }
+            OfferTransitionAction.DECLINE_OFFER -> {
+                val allowed = (actorUid == sellerId && currentStatus == OfferStatus.PENDING.wireValue) ||
+                    (actorUid == buyerId && currentStatus == OfferStatus.COUNTERED.wireValue)
+                require(allowed) { "You cannot decline the offer in its current state." }
+                OfferStatus.DECLINED
+            }
+        }
+    }
+
+    fun validateOfferTransition(
+        conversation: Conversation,
+        actorUid: String,
+        action: OfferTransitionAction,
+        amount: Double? = null,
+        counterAmount: Double? = null,
+        productStatus: String = ProductStatus.ACTIVE.wireValue
+    ): Result<OfferStatus> = validateOfferTransition(
+        currentStatus = conversation.offerStatus,
+        actorUid = actorUid,
+        buyerId = conversation.buyerId,
+        sellerId = conversation.sellerId,
+        action = action,
+        amount = amount ?: counterAmount,
+        productStatus = productStatus
+    )
 
     fun parseIsoTimestampMillis(iso: String): Long? {
         val patterns = listOf(
@@ -726,7 +844,7 @@ object MarketplaceLogic {
                     ?: firstProd?.city.orEmpty(),
                 rating = liveUser?.rating ?: firstProd?.sellerRating ?: 5.0,
                 dealsCompleted = maxOf(liveUser?.dealsCompleted ?: 0, firstProd?.sellerDealsCount ?: 0),
-                verifiedIdentity = (liveUser?.verifiedIdentity == true) || (firstProd?.sellerVerified == true),
+                verifiedIdentity = liveUser?.verifiedIdentity ?: (firstProd?.sellerVerified == true),
                 products = sellerProducts
             )
         }.sortedWith(
@@ -774,6 +892,7 @@ object MarketplaceLogic {
         if (!user.resolvedAccountType().isCommercial()) return null
         return user.copy(
             suspendedUntil = null,
+            suspendedUntilTs = null,
             suspensionDays = null,
             suspensionReason = null
         )
@@ -807,5 +926,50 @@ object MarketplaceLogic {
             merged[currentUser.uid] = currentUser
         }
         return merged.values.toList()
+    }
+
+    fun buildDeterministicReviewId(productId: String, reviewerId: String): String {
+        val cleanProduct = productId.trim()
+        val cleanReviewer = reviewerId.trim()
+        require(cleanProduct.isNotEmpty() && cleanReviewer.isNotEmpty()) {
+            "Product ID and Reviewer ID are required."
+        }
+        val reviewId = "${cleanProduct}_${cleanReviewer}"
+        require(reviewId.length in 1..128 && Regex("^[a-zA-Z0-9_\\-]+$").matches(reviewId)) {
+            "Deterministic review ID must be 1..128 valid characters."
+        }
+        return reviewId
+    }
+
+    fun hasBuyerAlreadyReviewedProduct(
+        reviews: List<UserReview>,
+        currentUserId: String?,
+        productId: String?
+    ): Boolean {
+        if (currentUserId.isNullOrBlank() || productId.isNullOrBlank()) return false
+        return reviews.any { it.reviewerId == currentUserId && it.productId == productId }
+    }
+
+    fun findEligibleReviewConversation(
+        conversations: List<Conversation>,
+        products: List<Product>,
+        reviews: List<UserReview>,
+        currentUserId: String?,
+        sellerId: String,
+        productId: String? = null,
+        isSuspended: Boolean = false
+    ): Conversation? {
+        if (currentUserId.isNullOrBlank() || isSuspended) return null
+        if (sellerId.isBlank() || currentUserId == sellerId) return null
+
+        val productsById = products.associateBy { it.id }
+        return conversations.firstOrNull { conv ->
+            conv.buyerId == currentUserId &&
+                conv.sellerId == sellerId &&
+                conv.offerStatus == OfferStatus.ACCEPTED.wireValue &&
+                (productId == null || conv.productId == productId) &&
+                productsById[conv.productId]?.status == ProductStatus.SOLD.wireValue &&
+                !hasBuyerAlreadyReviewedProduct(reviews, currentUserId, conv.productId)
+        }
     }
 }

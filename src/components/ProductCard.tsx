@@ -142,7 +142,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </span>
             {product.sellerVerified && (
               <span title={t.verifiedSeller}>
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               </span>
             )}
           </div>

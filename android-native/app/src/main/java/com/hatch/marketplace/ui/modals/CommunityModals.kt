@@ -53,13 +53,12 @@ import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -603,13 +602,9 @@ fun CreateAccountAuthSheet(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(18.dp))
                         Text(
-                            text = if (language == AppLanguage.AR) {
-                                "شارة التوثيق الذهبية تظهر تلقائياً بعد إتمام 10 صفقات بيع ناجحة وموثقة."
-                            } else {
-                                "The verified badge unlocks automatically after 10 trusted completed deals."
-                            },
+                            text = strings.goldBadgeAdminDesc,
                             color = HatchTextMuted,
                             fontSize = 11.sp
                         )
@@ -1208,11 +1203,10 @@ fun ReportViolationModal(
     language: AppLanguage,
     strings: HatchStrings,
     onDismiss: () -> Unit,
-    onSubmit: (reason: String, message: String, flagListing: Boolean) -> Unit
+    onSubmit: (reason: String, message: String) -> Unit
 ) {
     var selectedReason by remember { mutableStateOf(strings.reportReasons.first().first) }
     var message by remember { mutableStateOf("") }
-    var flagListing by remember { mutableStateOf(request.productId != null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1252,31 +1246,88 @@ fun ReportViolationModal(
                     singleLine = false,
                     minLines = 3
                 )
-                if (request.productId != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = flagListing,
-                            onCheckedChange = { flagListing = it },
-                            colors = CheckboxDefaults.colors(checkedColor = HatchRose500)
-                        )
-                        Text(
-                            text = if (language == AppLanguage.AR) "تمييز الإعلان للمراجعة الفورية" else "Flag listing for urgent review",
-                            color = HatchTextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
-                }
+                Text(
+                    text = if (language == AppLanguage.AR) {
+                        "سيتم إرسال البلاغ للمشرفين لمراجعته واتخاذ الإجراء المناسب."
+                    } else {
+                        "Your report will be reviewed by HATCH moderators."
+                    },
+                    color = HatchTextMuted,
+                    fontSize = 10.sp
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSubmit(selectedReason, message, flagListing) },
+                onClick = { onSubmit(selectedReason, message) },
                 enabled = !isSubmitting && message.trim().length >= 5,
                 colors = ButtonDefaults.buttonColors(containerColor = HatchRose500, contentColor = Color.White)
             ) { Text(if (language == AppLanguage.AR) "إرسال البلاغ" else "Submit Report", fontWeight = FontWeight.Black) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(if (language == AppLanguage.AR) "إلغاء" else "Cancel", color = HatchTextMuted) }
+        }
+    )
+}
+
+@Composable
+fun VerificationRequestDialog(
+    isSubmitting: Boolean,
+    language: AppLanguage,
+    strings: HatchStrings,
+    onDismiss: () -> Unit,
+    onSubmit: (note: String, documentUrl: String?) -> Unit
+) {
+    var note by remember { mutableStateOf("") }
+    var docUrl by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = HatchSurfaceDark,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400)
+                Text(strings.requestGoldVerification, color = HatchAmber400, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = strings.goldBadgeAdminDesc,
+                    color = HatchTextSecondary,
+                    fontSize = 12.sp
+                )
+                HatchField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = strings.verificationNoteLabel,
+                    singleLine = false,
+                    minLines = 3
+                )
+                HatchField(
+                    value = docUrl,
+                    onValueChange = { docUrl = it },
+                    label = strings.verificationDocUrlLabel
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSubmit(note.trim(), docUrl.trim().takeIf { it.isNotBlank() }) },
+                enabled = !isSubmitting && note.trim().length >= 5,
+                colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(color = HatchBgDark, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(strings.submitVerificationBtn, fontWeight = FontWeight.Black)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (language == AppLanguage.AR) "إلغاء" else "Cancel", color = HatchTextMuted)
+            }
         }
     )
 }

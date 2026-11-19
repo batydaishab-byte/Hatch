@@ -107,7 +107,7 @@ export const SellModal: React.FC = () => {
       negotiable,
       deliveryAvailable,
       urgentSale,
-      featured: true,
+      featured: false,
     });
   };
 

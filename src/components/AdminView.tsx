@@ -54,10 +54,11 @@ import {
   Filter,
   Shield,
   AlertOctagon,
-  Calendar
+  Calendar,
+  Award
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Conversation, ReportTicket, AdFormat, SponsoredAdItem, User } from '../types';
+import { Conversation, ReportTicket, AdFormat, SponsoredAdItem, User, isUserSuspendedActive } from '../types';
 import { AdminConversationModal } from './AdminConversationModal';
 
 export const AdminView: React.FC = () => {
@@ -90,14 +91,31 @@ export const AdminView: React.FC = () => {
     recordAdImpression,
     showInterstitialAd,
     showRewardedAd,
+    isAdmin,
+    firebaseUser,
+    verificationRequests,
+    creditTransactions,
+    adminApproveVerification,
+    adminRejectVerification,
+    adminSetUserVerified,
+    adminGrantCredit,
     t, 
     language 
   } = useApp();
 
-  const [activeAdminTab, setActiveAdminTab] = useState<'reports' | 'broadcast' | 'sold' | 'conversations' | 'flagged' | 'monetization' | 'users'>('reports');
+  const [activeAdminTab, setActiveAdminTab] = useState<'reports' | 'verifications' | 'credits' | 'broadcast' | 'sold' | 'conversations' | 'flagged' | 'monetization' | 'users'>('reports');
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [selectedReport, setSelectedReport] = useState<ReportTicket | null>(null);
   const [isChatAuditModalOpen, setIsChatAuditModalOpen] = useState(false);
+
+  // Gold Verification rejection state
+  const [rejectingRequestId, setRejectingRequestId] = useState<string | null>(null);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+
+  // Admin Credit Grant modal state
+  const [selectedUserForCredit, setSelectedUserForCredit] = useState<User | null>(null);
+  const [creditGrantAmount, setCreditGrantAmount] = useState<number>(1);
+  const [creditGrantReason, setCreditGrantReason] = useState('');
 
   // User Management states
   const [userSearchQuery, setUserSearchQuery] = useState('');
@@ -415,6 +433,12 @@ export const AdminView: React.FC = () => {
     setSelectedReport(null);
     setIsChatAuditModalOpen(true);
   };
+
+  const pendingVerificationsCount = verificationRequests.filter((r) => r.status === 'pending').length;
+
+  if (!isAdmin) {
+    return null;
+  }
 
   return (
     <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 pb-24 space-y-6">
@@ -798,6 +822,40 @@ export const AdminView: React.FC = () => {
           </span>
         </button>
 
+        {/* تبويب طلبات التوثيق الذهبي */}
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('verifications')}
+          className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
+            activeAdminTab === 'verifications'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+              : 'text-neutral-400 hover:text-amber-300'
+          }`}
+        >
+          <Award className="w-4 h-4 text-amber-400" />
+          <span>{language === 'ar' ? 'طلبات التوثيق الذهبي' : 'Gold Verification'}</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-950 text-amber-300 border border-amber-700">
+            {pendingVerificationsCount}
+          </span>
+        </button>
+
+        {/* تبويب سجل أرصدة التمييز */}
+        <button
+          type="button"
+          onClick={() => setActiveAdminTab('credits')}
+          className={`py-2 px-3.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 ${
+            activeAdminTab === 'credits'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+              : 'text-neutral-400 hover:text-amber-300'
+          }`}
+        >
+          <Coins className="w-4 h-4 text-amber-400" />
+          <span>{language === 'ar' ? 'سجل رصيد التمييز' : 'Credit Ledger'}</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-neutral-800 text-amber-300 border border-neutral-700">
+            {creditTransactions.length}
+          </span>
+        </button>
+
         {/* زر يعرض الإعلانات التي تم بيعها */}
         <button
           type="button"
@@ -908,7 +966,7 @@ export const AdminView: React.FC = () => {
                       {notif.type === 'offer' && <Tag className="w-4 h-4 text-amber-400" />}
                       {notif.type === 'alert' && <AlertTriangle className="w-4 h-4 text-rose-400" />}
                       {notif.type === 'update' && <Sparkles className="w-4 h-4 text-cyan-400" />}
-                      {notif.type === 'verification' && <ShieldCheck className="w-4 h-4 text-emerald-400" />}
+                      {notif.type === 'verification' && <ShieldCheck className="w-4 h-4 text-amber-400" />}
                       {(notif.type === 'system' || notif.type === 'message' || notif.type === 'price_drop') && <Megaphone className="w-4 h-4 text-purple-400" />}
                     </div>
 
@@ -921,13 +979,13 @@ export const AdminView: React.FC = () => {
                           notif.type === 'offer' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' :
                           notif.type === 'alert' ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' :
                           notif.type === 'update' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30' :
-                          notif.type === 'verification' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' :
+                          notif.type === 'verification' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' :
                           'bg-purple-500/15 text-purple-300 border border-purple-500/30'
                         }`}>
                           {notif.type === 'offer' ? '🏷️ عرض ترويجي' :
                            notif.type === 'alert' ? '⚠️ تنبيه أمني' :
                            notif.type === 'update' ? '✨ مستجدات هتش' :
-                           notif.type === 'verification' ? '🛡️ توثيق' : '📢 إشعار عام'}
+                           notif.type === 'verification' ? '🏅 توثيق ذهبي' : '📢 إشعار عام'}
                         </span>
                         <span className="text-[10px] text-neutral-500">
                           {notif.time}
@@ -1302,7 +1360,210 @@ export const AdminView: React.FC = () => {
             </div>
           )}
         </div>
-      ) : (
+      ) : activeAdminTab === 'verifications' ? (
+        /* Gold Verification Requests Queue */
+        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-5 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+            <h3 className="font-bold text-sm text-white flex items-center gap-2">
+              <Award className="w-4 h-4 text-amber-400" />
+              <span>{language === 'ar' ? 'طلبات التوثيق الذهبي (بمراجعة الإدارة)' : 'Gold Verification Requests'}</span>
+              <span className="text-xs text-neutral-400 font-normal">({verificationRequests.length})</span>
+            </h3>
+            <span className="text-[11px] text-amber-300">
+              {language === 'ar' ? 'لا يتم التوثيق تلقائياً — يُعتمد فقط من الإدارة' : 'Strictly admin-reviewed'}
+            </span>
+          </div>
+
+          {verificationRequests.length > 0 ? (
+            <div className="space-y-3">
+              {verificationRequests.map((req) => (
+                <div
+                  key={req.id}
+                  className="p-4 rounded-2xl bg-neutral-950/80 border border-neutral-800 space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <img
+                        src={req.userAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=128&q=80'}
+                        alt={req.userName}
+                        className="w-10 h-10 rounded-full object-cover ring-1 ring-amber-400/50 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-sm text-white truncate">{req.userName}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300 border border-neutral-700">
+                            {req.accountType === 'store'
+                              ? t.commercialBadgeStore
+                              : req.accountType === 'company'
+                              ? t.commercialBadgeCompany
+                              : t.commercialBadgePersonal}
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            req.status === 'approved'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                              : req.status === 'rejected' || req.status === 'revoked'
+                              ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                              : 'bg-neutral-800 text-amber-200 border-neutral-700'
+                          }`}>
+                            {req.status === 'approved'
+                              ? (language === 'ar' ? 'معتمد ✓' : 'Approved ✓')
+                              : req.status === 'rejected'
+                              ? (language === 'ar' ? 'مرفوض' : 'Rejected')
+                              : req.status === 'revoked'
+                              ? (language === 'ar' ? 'مسحوب' : 'Revoked')
+                              : (language === 'ar' ? 'بانتظار المراجعة' : 'Pending')}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-neutral-400 mt-0.5">
+                          {req.city} • {req.createdAt}
+                        </div>
+                      </div>
+                    </div>
+
+                    {req.status === 'pending' && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void adminApproveVerification(req.id);
+                          }}
+                          className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>{language === 'ar' ? 'منح الشارة الذهبية' : 'Approve Gold Badge'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRejectingRequestId(req.id);
+                            setRejectionReasonInput('');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-rose-600 text-neutral-300 hover:text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>{language === 'ar' ? 'رفض' : 'Reject'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-neutral-200 bg-neutral-900 p-3 rounded-xl border border-neutral-800 leading-relaxed">
+                    "{req.note}"
+                  </p>
+
+                  {req.documentUrl && (
+                    <a
+                      href={req.documentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 underline"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>{language === 'ar' ? 'عرض المستند / الرابط المرفق' : 'Inspect attached document'}</span>
+                    </a>
+                  )}
+
+                  {req.rejectionReason && (
+                    <p className="text-[11px] text-rose-300">
+                      {language === 'ar' ? `سبب الرفض: ${req.rejectionReason}` : `Rejection reason: ${req.rejectionReason}`}
+                    </p>
+                  )}
+
+                  {rejectingRequestId === req.id && (
+                    <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-neutral-800">
+                      <input
+                        type="text"
+                        value={rejectionReasonInput}
+                        onChange={(e) => setRejectionReasonInput(e.target.value)}
+                        placeholder={language === 'ar' ? 'أدخل سبب الرفض (3 أحرف على الأقل)...' : 'Rejection reason (min 3 chars)...'}
+                        className="flex-1 bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-rose-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={rejectionReasonInput.trim().length < 3}
+                        onClick={() => {
+                          void adminRejectVerification(req.id, rejectionReasonInput.trim());
+                          setRejectingRequestId(null);
+                          setRejectionReasonInput('');
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold cursor-pointer"
+                      >
+                        {language === 'ar' ? 'تأكيد الرفض' : 'Confirm Reject'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRejectingRequestId(null)}
+                        className="px-3 py-1.5 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-bold cursor-pointer"
+                      >
+                        {t.cancelBtn}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-10 text-neutral-400 text-xs">
+              {language === 'ar' ? 'لا توجد طلبات توثيق ذهبي مسجلة حالياً' : 'No Gold verification requests yet'}
+            </div>
+          )}
+        </div>
+      ) : activeAdminTab === 'credits' ? (
+        /* Immutable Reward Credit Audit Ledger */
+        <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-5 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+            <h3 className="font-bold text-sm text-white flex items-center gap-2">
+              <Coins className="w-4 h-4 text-amber-400" />
+              <span>{language === 'ar' ? 'سجل منح وصرف رصيد تمييز الإعلانات' : 'Boost Credit Transactions Ledger'}</span>
+              <span className="text-xs text-neutral-400 font-normal">({creditTransactions.length})</span>
+            </h3>
+            <span className="text-[11px] text-neutral-400">
+              {language === 'ar' ? 'سجل تدقيقي غير قابل للتعديل أو الحذف' : 'Append-only immutable audit ledger'}
+            </span>
+          </div>
+
+          {creditTransactions.length > 0 ? (
+            <div className="divide-y divide-neutral-800/80">
+              {creditTransactions.map((tx) => {
+                const targetUser = availableUsers.find((u) => u.id === tx.uid);
+                return (
+                  <div key={tx.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`font-mono font-black px-2 py-0.5 rounded-md border ${
+                          tx.amount > 0
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        }`}>
+                          {tx.amount > 0 ? `+${tx.amount}` : tx.amount}
+                        </span>
+                        <span className="font-bold text-white truncate">
+                          {targetUser?.name || tx.uid}
+                        </span>
+                        <span className="text-[10px] font-mono text-neutral-400 bg-neutral-950 px-2 py-0.5 rounded border border-neutral-800">
+                          {tx.type}
+                        </span>
+                      </div>
+                      <p className="text-neutral-300">{tx.reason}</p>
+                      <div className="text-[10px] text-neutral-500 font-mono">
+                        {tx.balanceBefore} → {tx.balanceAfter}
+                        {tx.productId ? ` • Product: ${tx.productId}` : ''}
+                        {tx.grantedBy ? ` • By: ${tx.grantedBy}` : ''}
+                      </div>
+                    </div>
+                    <span className="text-[11px] text-neutral-500 font-mono shrink-0">{tx.createdAt}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-10 text-neutral-400 text-xs">
+              {language === 'ar' ? 'لا توجد حركات رصيد مسجلة حتى الآن' : 'No credit transactions recorded yet'}
+            </div>
+          )}
+        </div>
+      ) : activeAdminTab === 'flagged' ? (
         /* Flagged Items Queue */
         <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-5 shadow-xl">
           <h3 className="font-bold text-sm text-white mb-4 flex items-center gap-2">
@@ -1370,7 +1631,7 @@ export const AdminView: React.FC = () => {
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* Monetization & Google AdMob Management Tab */}
       {activeAdminTab === 'monetization' && (
@@ -1801,8 +2062,8 @@ export const AdminView: React.FC = () => {
                 </div>
                 <p className="text-[11px] text-neutral-400 leading-relaxed">
                   {language === 'ar'
-                    ? 'فيديو بمكافأة يمنح المستخدم ميزة تمييز إعلانه مجاناً بعد المشاهدة.'
-                    : 'Rewarded video granting the user a free listing boost credit.'}
+                    ? 'معاينة واجهة فيديو المكافآت في التطبيق؛ منح أرصدة التمييز يتم حصرياً عبر تبويب إدارة المستخدمين.'
+                    : 'Preview the rewarded video overlay; boost credits are strictly issued from Users Management.'}
                 </p>
                 <div className="text-[10px] font-mono text-emerald-400">
                   Duration: {adMobConfig.rewardedDurationSeconds || 15}s
@@ -2558,9 +2819,9 @@ export const AdminView: React.FC = () => {
                 </span>
                 {[
                   { id: 'all', labelAr: 'جميع المستخدمين', labelEn: 'All Users', count: availableUsers.length },
-                  { id: 'active', labelAr: 'حسابات نشطة', labelEn: 'Active', count: availableUsers.filter((u) => u.status !== 'suspended').length },
-                  { id: 'suspended', labelAr: 'حسابات موقوفة ⚠️', labelEn: 'Suspended ⚠️', count: availableUsers.filter((u) => u.status === 'suspended').length },
-                  { id: 'verified', labelAr: 'بائعين موثقين 🛡️', labelEn: 'Verified 🛡️', count: availableUsers.filter((u) => u.verifiedIdentity).length },
+                  { id: 'active', labelAr: 'حسابات نشطة', labelEn: 'Active', count: availableUsers.filter((u) => !isUserSuspendedActive(u)).length },
+                  { id: 'suspended', labelAr: 'حسابات موقوفة ⚠️', labelEn: 'Suspended ⚠️', count: availableUsers.filter((u) => isUserSuspendedActive(u)).length },
+                  { id: 'verified', labelAr: 'بائعين موثقين 🏅', labelEn: 'Gold Verified 🏅', count: availableUsers.filter((u) => u.verifiedIdentity).length },
                 ].map((chip) => (
                   <button
                     key={chip.id}
@@ -2601,8 +2862,8 @@ export const AdminView: React.FC = () => {
 
               if (!matchesQuery) return false;
 
-              if (userStatusFilter === 'active') return u.status !== 'suspended';
-              if (userStatusFilter === 'suspended') return u.status === 'suspended';
+              if (userStatusFilter === 'active') return !isUserSuspendedActive(u);
+              if (userStatusFilter === 'suspended') return isUserSuspendedActive(u);
               if (userStatusFilter === 'verified') return u.verifiedIdentity;
               return true;
             });
@@ -2625,7 +2886,7 @@ export const AdminView: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredUsers.map((u) => {
                   const isCurrent = currentUser.id === u.id;
-                  const isSuspended = u.status === 'suspended';
+                  const isSuspended = isUserSuspendedActive(u);
                   const userActiveAds = products.filter((p) => p.sellerId === u.id && p.status !== 'sold');
                   const userSoldAds = products.filter((p) => p.sellerId === u.id && p.status === 'sold');
 
@@ -2670,9 +2931,9 @@ export const AdminView: React.FC = () => {
                                   </span>
                                 )}
                                 {u.verifiedIdentity && (
-                                  <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
-                                    <ShieldCheck className="w-3 h-3" />
-                                    <span>{language === 'ar' ? 'موثق' : 'Verified'}</span>
+                                  <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
+                                    <ShieldCheck className="w-3 h-3 text-amber-400" />
+                                    <span>{language === 'ar' ? 'موثق ذهبي' : 'Gold Verified'}</span>
                                   </span>
                                 )}
                                 {isCurrent && (
@@ -2786,6 +3047,38 @@ export const AdminView: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
+                            void adminSetUserVerified(u.id, !u.verifiedIdentity);
+                          }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                            u.verifiedIdentity
+                              ? 'bg-amber-500/15 hover:bg-rose-500/20 text-amber-300 hover:text-rose-200 border-amber-500/40'
+                              : 'bg-neutral-800 hover:bg-amber-500/20 text-neutral-200 hover:text-amber-300 border-neutral-700'
+                          }`}
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                          <span>
+                            {u.verifiedIdentity
+                              ? (language === 'ar' ? 'سحب الشارة' : 'Revoke Gold')
+                              : (language === 'ar' ? 'منح التوثيق الذهبي' : 'Grant Gold')}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedUserForCredit(u);
+                            setCreditGrantAmount(1);
+                            setCreditGrantReason(language === 'ar' ? 'منحة رصيد تمييز إعلانات من الإدارة' : 'Admin boost credit grant');
+                          }}
+                          className="py-2 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Coins className="w-3.5 h-3.5 text-amber-400" />
+                          <span>{language === 'ar' ? '+ رصيد تمييز' : '+ Boost Credit'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
                             setSelectedUserForDelete(u);
                             setIsDeleteConfirmModalOpen(true);
                           }}
@@ -2796,7 +3089,7 @@ export const AdminView: React.FC = () => {
                           <span>{language === 'ar' ? 'حذف الحساب' : 'Delete'}</span>
                         </button>
 
-                        {!isCurrent && (
+                        {!isCurrent && !firebaseUser && (
                           <button
                             type="button"
                             onClick={() => switchUser(u.id)}
@@ -3080,6 +3373,89 @@ export const AdminView: React.FC = () => {
           </div>
         </div>
       )}
+      {/* MODAL: ADMIN GRANT BOOST CREDITS */}
+      {selectedUserForCredit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="bg-neutral-900 border border-amber-500/40 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2">
+                <Coins className="w-5 h-5 text-amber-400" />
+                <h3 className="text-base font-black text-white">
+                  {language === 'ar' ? 'منح رصيد تمييز إعلانات' : 'Grant Boost Credits'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedUserForCredit(null)}
+                className="p-1.5 rounded-xl bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs text-neutral-300">
+              {language === 'ar' ? 'المستفيد:' : 'Recipient:'}{' '}
+              <strong className="text-white">{selectedUserForCredit.name}</strong>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-neutral-300 mb-1">
+                  {language === 'ar' ? 'عدد الأرصدة (1 - 100)' : 'Credit Amount (1 - 100)'}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={creditGrantAmount}
+                  onChange={(e) => setCreditGrantAmount(Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)))}
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-neutral-300 mb-1">
+                  {language === 'ar' ? 'سبب المنحة (يُسجل في دفتر الرصيد)' : 'Audit Reason'}
+                </label>
+                <input
+                  type="text"
+                  minLength={2}
+                  maxLength={240}
+                  value={creditGrantReason}
+                  onChange={(e) => setCreditGrantReason(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-xs text-white focus:outline-none focus:border-amber-400"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSelectedUserForCredit(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-bold cursor-pointer"
+              >
+                {t.cancelBtn}
+              </button>
+              <button
+                type="button"
+                disabled={creditGrantReason.trim().length < 2}
+                onClick={async () => {
+                  await adminGrantCredit(
+                    selectedUserForCredit.id,
+                    creditGrantAmount,
+                    creditGrantReason.trim()
+                  );
+                  setSelectedUserForCredit(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-neutral-950 text-xs font-black cursor-pointer"
+              >
+                {language === 'ar' ? 'اعتماد المنحة' : 'Confirm Grant'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <AdminConversationModal
         isOpen={isChatAuditModalOpen}
         onClose={() => {

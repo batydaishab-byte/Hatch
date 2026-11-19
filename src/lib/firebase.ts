@@ -14,6 +14,8 @@ import {
   getDocFromServer,
   setDoc,
   updateDoc,
+  deleteDoc,
+  deleteField,
   collection,
   query,
   where,
@@ -21,10 +23,20 @@ import {
   onSnapshot,
   serverTimestamp,
   writeBatch,
+  runTransaction,
   Timestamp,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { AccountType, Product, resolveAccountType, User } from '../types';
+import {
+  AccountType,
+  CreditTransaction,
+  isUserSuspendedActive,
+  Product,
+  ReportTicket,
+  resolveAccountType,
+  User,
+  VerificationRequest,
+} from '../types';
 
 export enum OperationType {
   CREATE = 'create',
@@ -169,6 +181,40 @@ function formatJoinedDate(val: unknown): string {
 export interface LoadedFirestoreProfile {
   user: User;
   isComplete: boolean;
+  rewardCredits: number;
+}
+
+function parseSuspendedFields(pub: Record<string, any>): {
+  status: 'active' | 'suspended';
+  suspendedUntil?: string;
+  suspendedUntilMs?: number;
+} {
+  let suspendedUntilMs: number | undefined;
+  let suspendedUntil: string | undefined =
+    typeof pub.suspendedUntil === 'string' ? pub.suspendedUntil : undefined;
+
+  if (pub.suspendedUntilTs instanceof Timestamp) {
+    suspendedUntilMs = pub.suspendedUntilTs.toMillis();
+    suspendedUntil = pub.suspendedUntilTs.toDate().toISOString();
+  } else if (suspendedUntil) {
+    const parsed = Date.parse(suspendedUntil);
+    if (!Number.isNaN(parsed)) {
+      suspendedUntilMs = parsed;
+    }
+  }
+
+  const rawStatus = pub.status === 'suspended' ? 'suspended' : 'active';
+  const activeSuspended = isUserSuspendedActive({
+    status: rawStatus,
+    suspendedUntil,
+    suspendedUntilMs,
+  });
+
+  return {
+    status: activeSuspended ? 'suspended' : 'active',
+    suspendedUntil: activeSuspended ? suspendedUntil : undefined,
+    suspendedUntilMs: activeSuspended ? suspendedUntilMs : undefined,
+  };
 }
 
 export async function fetchUserProfileFromFirestore(
@@ -194,6 +240,26 @@ export async function fetchUserProfileFromFirestore(
       // If private doc doesn't exist yet or isn't readable, continue gracefully with public doc
     }
 
+    let hasAdminClaim = false;
+    try {
+      if (auth.currentUser && auth.currentUser.uid === uid) {
+        const tokenResult = await auth.currentUser.getIdTokenResult();
+        hasAdminClaim = Boolean(
+          tokenResult?.claims?.admin === true && auth.currentUser.emailVerified === true
+        );
+      }
+    } catch {
+      hasAdminClaim = false;
+    }
+
+    let isAdminDoc = false;
+    try {
+      const adminSnap = await getDoc(doc(db, 'admins', uid));
+      isAdminDoc = adminSnap.exists();
+    } catch {
+      isAdminDoc = false;
+    }
+
     const accountType = resolveAccountType(pub.accountType as AccountType | undefined);
     const name = typeof pub.name === 'string' ? pub.name.trim() : '';
     const city = typeof pub.city === 'string' ? pub.city.trim() : '';
@@ -209,6 +275,12 @@ export async function fetchUserProfileFromFirestore(
 
     const isComplete =
       name.length >= 2 && city.length >= 2 && phone.length >= 6 && hasBusinessRequirement;
+
+    const susp = parseSuspendedFields(pub);
+    const rewardCredits =
+      typeof priv.rewardCredits === 'number' && priv.rewardCredits >= 0
+        ? Math.floor(priv.rewardCredits)
+        : 0;
 
     const user: User = {
       id: uid,
@@ -231,17 +303,77 @@ export async function fetchUserProfileFromFirestore(
       reportsCount: typeof pub.reportsCount === 'number' ? pub.reportsCount : 0,
       verifiedIdentity: Boolean(pub.verifiedIdentity),
       joinedDate: formatJoinedDate(pub.joinedDate),
-      role: priv.role === 'admin' ? 'admin' : 'user',
-      status: pub.status === 'suspended' ? 'suspended' : 'active',
-      suspendedUntil: pub.suspendedUntil,
-      suspensionDays: pub.suspensionDays,
-      suspensionReason: pub.suspensionReason,
+      role: hasAdminClaim || isAdminDoc || priv.role === 'admin' ? 'admin' : 'user',
+      hasAdminClaim,
+      isAdminDoc,
+      status: susp.status,
+      suspendedUntil: susp.suspendedUntil,
+      suspendedUntilMs: susp.suspendedUntilMs,
+      suspensionDays: susp.status === 'suspended' ? pub.suspensionDays : undefined,
+      suspensionReason: susp.status === 'suspended' ? pub.suspensionReason : undefined,
+      lastSoldProductId: typeof pub.lastSoldProductId === 'string' ? pub.lastSoldProductId : undefined,
       profileCompleted: isComplete,
     };
 
-    return { user, isComplete };
+    return { user, isComplete, rewardCredits };
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, `${publicPath} / ${privatePath}`);
+  }
+}
+
+async function syncCommercialProfileInFirestore(
+  uid: string,
+  accountType: AccountType,
+  fields: {
+    name: string;
+    avatar: string;
+    city: string;
+    businessActivity?: string;
+    businessLogo?: string;
+  }
+): Promise<void> {
+  const commercialRef = doc(db, 'commercial_profiles', uid);
+  const publicRef = doc(db, 'users_public', uid);
+
+  try {
+    const commercialSnap = await getDoc(commercialRef);
+    if (accountType === 'store' || accountType === 'company') {
+      const pubSnap = await getDoc(publicRef);
+      if (!pubSnap.exists()) return;
+      const pubData = pubSnap.data();
+      if (commercialSnap.exists()) {
+        await updateDoc(commercialRef, {
+          name: fields.name,
+          avatar: fields.avatar,
+          city: fields.city,
+          accountType,
+          businessActivity: (fields.businessActivity || '').trim().slice(0, 120),
+          businessLogo: fields.businessLogo || fields.avatar,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(commercialRef, {
+          uid,
+          name: fields.name,
+          avatar: fields.avatar,
+          city: fields.city,
+          rating: typeof pubData.rating === 'number' ? pubData.rating : 5.0,
+          dealsCompleted: typeof pubData.dealsCompleted === 'number' ? pubData.dealsCompleted : 0,
+          reportsCount: typeof pubData.reportsCount === 'number' ? pubData.reportsCount : 0,
+          verifiedIdentity: Boolean(pubData.verifiedIdentity),
+          status: pubData.status === 'suspended' ? 'suspended' : 'active',
+          accountType,
+          businessActivity: (fields.businessActivity || '').trim().slice(0, 120),
+          businessLogo: fields.businessLogo || fields.avatar,
+          joinedDate: pubData.joinedDate || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } else if (commercialSnap.exists()) {
+      await deleteDoc(commercialRef);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `commercial_profiles/${uid}`);
   }
 }
 
@@ -313,6 +445,14 @@ export async function upsertOnboardingUserToFirestore(
     handleFirestoreError(error, OperationType.WRITE, `users_public/${uid}`);
   }
 
+  await syncCommercialProfileInFirestore(uid, accountType, {
+    name: safeName,
+    avatar: accountType === 'personal' ? safeAvatar : safeLogo,
+    city: safeCity,
+    businessActivity: safeActivity,
+    businessLogo: safeLogo,
+  });
+
   try {
     const privateSnap = await getDoc(privateRef);
     if (!privateSnap.exists()) {
@@ -382,13 +522,32 @@ export async function updateUserProfileInFirestore(
     publicUpdate.avatar = publicUpdate.businessLogo;
   }
 
+  let latestPublicData: Record<string, any> | null = null;
   try {
     const publicSnap = await getDoc(publicRef);
     if (publicSnap.exists()) {
       await updateDoc(publicRef, publicUpdate);
+      latestPublicData = { ...publicSnap.data(), ...publicUpdate };
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users_public/${uid}`);
+  }
+
+  if (latestPublicData) {
+    const resolvedType = resolveAccountType(
+      (publicUpdate.accountType ?? latestPublicData.accountType) as AccountType | undefined
+    );
+    await syncCommercialProfileInFirestore(uid, resolvedType, {
+      name: normalizeNameForFirestore(publicUpdate.name ?? latestPublicData.name),
+      avatar: sanitizeUrlForFirestore(
+        publicUpdate.avatar ?? latestPublicData.avatar,
+        DEFAULT_FALLBACK_AVATAR
+      ),
+      city: (publicUpdate.city ?? latestPublicData.city ?? 'الخرطوم').toString().slice(0, 100),
+      businessActivity:
+        publicUpdate.businessActivity ?? latestPublicData.businessActivity ?? '',
+      businessLogo: publicUpdate.businessLogo ?? latestPublicData.businessLogo,
+    });
   }
 
   if (updates.phone !== undefined) {
@@ -405,7 +564,7 @@ export async function updateUserProfileInFirestore(
     }
   }
 
-  // Propagate updated identity to seller's active listings in Firestore so cards/detail views stay in sync
+  // Propagate updated identity strictly to seller's ACTIVE listings (per security rules)
   if (
     updates.name !== undefined ||
     updates.avatar !== undefined ||
@@ -416,25 +575,23 @@ export async function updateUserProfileInFirestore(
     try {
       const sellerProductsQuery = query(
         collection(db, 'products'),
-        where('sellerId', '==', uid)
+        where('sellerId', '==', uid),
+        where('status', '==', 'active')
       );
       const snap = await getDocs(sellerProductsQuery);
       if (!snap.empty) {
         const batch = writeBatch(db);
         let hasUpdates = false;
         snap.docs.forEach((docSnap) => {
-          const data = docSnap.data();
-          if (data.status !== 'sold') {
-            const prodPatch: Record<string, any> = { updatedAt: serverTimestamp() };
-            if (publicUpdate.name) prodPatch.sellerName = publicUpdate.name;
-            if (publicUpdate.avatar) prodPatch.sellerAvatar = publicUpdate.avatar;
-            if (publicUpdate.accountType) prodPatch.sellerAccountType = publicUpdate.accountType;
-            if (publicUpdate.businessActivity !== undefined) {
-              prodPatch.sellerBusinessActivity = publicUpdate.businessActivity;
-            }
-            batch.update(docSnap.ref, prodPatch);
-            hasUpdates = true;
+          const prodPatch: Record<string, any> = { updatedAt: serverTimestamp() };
+          if (publicUpdate.name) prodPatch.sellerName = publicUpdate.name;
+          if (publicUpdate.avatar) prodPatch.sellerAvatar = publicUpdate.avatar;
+          if (publicUpdate.accountType) prodPatch.sellerAccountType = publicUpdate.accountType;
+          if (publicUpdate.businessActivity !== undefined) {
+            prodPatch.sellerBusinessActivity = publicUpdate.businessActivity;
           }
+          batch.update(docSnap.ref, prodPatch);
+          hasUpdates = true;
         });
         if (hasUpdates) {
           await batch.commit();
@@ -467,6 +624,7 @@ export async function publishProductToFirestore(product: Product): Promise<void>
     DEFAULT_FALLBACK_AVATAR
   );
 
+  // Never trust client-supplied featured=true at product creation; boosting requires atomic credit spend
   const payload: Record<string, any> = {
     id: product.id,
     titleAr: safeTitleAr,
@@ -495,7 +653,7 @@ export async function publishProductToFirestore(product: Product): Promise<void>
     negotiable: Boolean(product.negotiable),
     deliveryAvailable: Boolean(product.deliveryAvailable),
     urgentSale: Boolean(product.urgentSale),
-    featured: Boolean(product.featured),
+    featured: false,
     viewsCount: 0,
     likesCount: 0,
     status: 'active',
@@ -517,13 +675,578 @@ export async function publishProductToFirestore(product: Product): Promise<void>
   }
 }
 
+export async function markProductAsSoldInFirestore(
+  productId: string,
+  sellerId: string
+): Promise<void> {
+  const productRef = doc(db, 'products', productId);
+  const publicRef = doc(db, 'users_public', sellerId);
+  const commercialRef = doc(db, 'commercial_profiles', sellerId);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const [prodSnap, pubSnap, commSnap] = await Promise.all([
+        tx.get(productRef),
+        tx.get(publicRef),
+        tx.get(commercialRef),
+      ]);
+      if (!prodSnap.exists()) {
+        throw new Error('Product does not exist');
+      }
+      const prodData = prodSnap.data();
+      if (prodData.sellerId !== sellerId || prodData.status !== 'active') {
+        throw new Error('Cannot mark this listing as sold');
+      }
+      if (!pubSnap.exists()) {
+        throw new Error('Seller public profile does not exist');
+      }
+      const pubData = pubSnap.data();
+      const nextDeals = (typeof pubData.dealsCompleted === 'number' ? pubData.dealsCompleted : 0) + 1;
+
+      tx.update(productRef, {
+        status: 'sold',
+        updatedAt: serverTimestamp(),
+      });
+      tx.update(publicRef, {
+        dealsCompleted: nextDeals,
+        lastSoldProductId: productId,
+        updatedAt: serverTimestamp(),
+      });
+      if (commSnap.exists()) {
+        const commData = commSnap.data();
+        const commNextDeals =
+          (typeof commData.dealsCompleted === 'number' ? commData.dealsCompleted : 0) + 1;
+        tx.update(commercialRef, {
+          dealsCompleted: commNextDeals,
+          lastSoldProductId: productId,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `products/${productId}`);
+  }
+}
+
+export async function featureProductWithCreditInFirestore(
+  productId: string,
+  uid: string
+): Promise<string> {
+  const txId = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const privateRef = doc(db, 'users_private', uid);
+  const productRef = doc(db, 'products', productId);
+  const txRef = doc(db, 'credit_transactions', txId);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const [privSnap, prodSnap] = await Promise.all([
+        tx.get(privateRef),
+        tx.get(productRef),
+      ]);
+      if (!privSnap.exists()) {
+        throw new Error('Private profile not found');
+      }
+      if (!prodSnap.exists()) {
+        throw new Error('Product not found');
+      }
+      const privData = privSnap.data();
+      const prodData = prodSnap.data();
+      const balanceBefore =
+        typeof privData.rewardCredits === 'number' ? privData.rewardCredits : 0;
+
+      if (balanceBefore < 1) {
+        throw new Error('Insufficient boost credits');
+      }
+      if (prodData.sellerId !== uid || prodData.status !== 'active') {
+        throw new Error('Only seller active listings can be boosted');
+      }
+      if (prodData.featured === true) {
+        throw new Error('Listing is already featured');
+      }
+
+      const balanceAfter = balanceBefore - 1;
+
+      tx.set(txRef, {
+        id: txId,
+        uid,
+        type: 'ad_boost_spend',
+        amount: -1,
+        balanceBefore,
+        balanceAfter,
+        productId,
+        reason: 'تمييز إعلان عبر رصيد التمييز المعتمد',
+        createdAt: serverTimestamp(),
+      });
+      tx.update(privateRef, {
+        rewardCredits: balanceAfter,
+        lastCreditTxId: txId,
+        updatedAt: serverTimestamp(),
+      });
+      tx.update(productRef, {
+        featured: true,
+        featuredTxId: txId,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    return txId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `credit_transactions/${txId}`);
+  }
+}
+
+export async function grantRewardCreditInFirestore(
+  targetUid: string,
+  amount: number,
+  reason: string,
+  adminUid: string
+): Promise<string> {
+  const safeAmount = Math.max(1, Math.min(100, Math.floor(amount)));
+  const txId = `tx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const privateRef = doc(db, 'users_private', targetUid);
+  const txRef = doc(db, 'credit_transactions', txId);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const privSnap = await tx.get(privateRef);
+      if (!privSnap.exists()) {
+        throw new Error('Target users_private document does not exist');
+      }
+      const privData = privSnap.data();
+      const balanceBefore =
+        typeof privData.rewardCredits === 'number' ? privData.rewardCredits : 0;
+      const balanceAfter = balanceBefore + safeAmount;
+
+      tx.set(txRef, {
+        id: txId,
+        uid: targetUid,
+        type: 'admin_grant',
+        amount: safeAmount,
+        balanceBefore,
+        balanceAfter,
+        grantedBy: adminUid,
+        reason: reason.trim().slice(0, 240) || 'منحة رصيد تمييز من إدارة هتش',
+        createdAt: serverTimestamp(),
+      });
+      tx.update(privateRef, {
+        rewardCredits: balanceAfter,
+        lastCreditTxId: txId,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    return txId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `credit_transactions/${txId}`);
+  }
+}
+
+export async function submitVerificationRequestToFirestore(
+  uid: string,
+  user: User,
+  note: string,
+  documentUrl?: string
+): Promise<VerificationRequest> {
+  const reqId = `vreq_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const reqRef = doc(db, 'verification_requests', reqId);
+  const safeNote = note.trim().slice(0, 600);
+  if (safeNote.length < 5) {
+    throw new Error('Verification note must be at least 5 characters');
+  }
+
+  const payload: Record<string, any> = {
+    id: reqId,
+    uid,
+    userName: normalizeNameForFirestore(user.name),
+    userAvatar: sanitizeUrlForFirestore(user.businessLogo || user.avatar, DEFAULT_FALLBACK_AVATAR),
+    accountType: resolveAccountType(user.accountType),
+    city: (user.city || 'الخرطوم').toString().slice(0, 100),
+    note: safeNote,
+    status: 'pending',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (documentUrl && documentUrl.trim() && !documentUrl.trim().startsWith('data:')) {
+    payload.documentUrl = documentUrl.trim().slice(0, 1000);
+  }
+
+  try {
+    await setDoc(reqRef, payload);
+    return {
+      id: reqId,
+      uid,
+      userName: payload.userName,
+      userAvatar: payload.userAvatar,
+      accountType: payload.accountType,
+      city: payload.city,
+      note: safeNote,
+      documentUrl: payload.documentUrl,
+      status: 'pending',
+      createdAt: new Date().toISOString().split('T')[0],
+      updatedAt: new Date().toISOString().split('T')[0],
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `verification_requests/${reqId}`);
+  }
+}
+
+export async function reviewVerificationRequestInFirestore(
+  reqId: string,
+  targetUid: string,
+  decision: 'approved' | 'rejected' | 'revoked',
+  adminUid: string,
+  rejectionReason?: string
+): Promise<void> {
+  const reqRef = doc(db, 'verification_requests', reqId);
+  const publicRef = doc(db, 'users_public', targetUid);
+  const commercialRef = doc(db, 'commercial_profiles', targetUid);
+  const isVerified = decision === 'approved';
+
+  try {
+    const reqUpdate: Record<string, any> = {
+      status: decision,
+      reviewedBy: adminUid,
+      reviewedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    if (rejectionReason && rejectionReason.trim()) {
+      reqUpdate.rejectionReason = rejectionReason.trim().slice(0, 400);
+    }
+
+    const batch = writeBatch(db);
+    batch.update(reqRef, reqUpdate);
+    batch.update(publicRef, {
+      verifiedIdentity: isVerified,
+      updatedAt: serverTimestamp(),
+    });
+
+    const commSnap = await getDoc(commercialRef);
+    if (commSnap.exists()) {
+      batch.update(commercialRef, {
+        verifiedIdentity: isVerified,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    const prodSnap = await getDocs(
+      query(collection(db, 'products'), where('sellerId', '==', targetUid))
+    );
+    prodSnap.docs.forEach((docSnap) => {
+      batch.update(docSnap.ref, {
+        sellerVerified: isVerified,
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `verification_requests/${reqId}`);
+  }
+}
+
+export async function setUserVerifiedInFirestore(
+  targetUid: string,
+  verified: boolean
+): Promise<void> {
+  const publicRef = doc(db, 'users_public', targetUid);
+  const commercialRef = doc(db, 'commercial_profiles', targetUid);
+  try {
+    const batch = writeBatch(db);
+    batch.update(publicRef, {
+      verifiedIdentity: verified,
+      updatedAt: serverTimestamp(),
+    });
+    const commSnap = await getDoc(commercialRef);
+    if (commSnap.exists()) {
+      batch.update(commercialRef, {
+        verifiedIdentity: verified,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    const prodSnap = await getDocs(
+      query(collection(db, 'products'), where('sellerId', '==', targetUid))
+    );
+    prodSnap.docs.forEach((docSnap) => {
+      batch.update(docSnap.ref, {
+        sellerVerified: verified,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users_public/${targetUid}`);
+  }
+}
+
+export async function submitReportToFirestore(report: ReportTicket): Promise<void> {
+  const reportRef = doc(db, 'reports', report.id);
+  const payload: Record<string, any> = {
+    id: report.id,
+    reporterId: report.reporterId,
+    reporterName: normalizeNameForFirestore(report.reporterName),
+    reason: report.reason.trim().slice(0, 120) || 'مخالفة',
+    message:
+      report.message.trim().length >= 5
+        ? report.message.trim().slice(0, 1500)
+        : 'بلاغ مخالفة للمراجعة من إدارة هتش',
+    status: 'pending',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (report.reportedUserId) payload.reportedUserId = report.reportedUserId;
+  if (report.reportedUserName) payload.reportedUserName = report.reportedUserName.slice(0, 80);
+  if (report.reportedProductId) payload.reportedProductId = report.reportedProductId;
+  if (report.reportedProductTitle) payload.reportedProductTitle = report.reportedProductTitle.slice(0, 140);
+
+  try {
+    await setDoc(reportRef, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `reports/${report.id}`);
+  }
+}
+
+export async function adminApproveProductInFirestore(productId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'products', productId), {
+      status: 'active',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `products/${productId}`);
+  }
+}
+
+export async function adminFlagProductInFirestore(productId: string): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'products', productId), {
+      status: 'flagged',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `products/${productId}`);
+  }
+}
+
+export async function adminDeleteProductInFirestore(productId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'products', productId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `products/${productId}`);
+  }
+}
+
+export async function adminSuspendUserInFirestore(
+  userId: string,
+  days: number,
+  reason: string
+): Promise<void> {
+  const safeDays = Math.max(1, Math.min(3650, Math.floor(days)));
+  const untilDate = new Date(Date.now() + safeDays * 24 * 60 * 60 * 1000);
+  const publicRef = doc(db, 'users_public', userId);
+  const commercialRef = doc(db, 'commercial_profiles', userId);
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(publicRef, {
+      status: 'suspended',
+      suspendedUntil: untilDate.toISOString(),
+      suspendedUntilTs: Timestamp.fromDate(untilDate),
+      suspensionDays: safeDays,
+      suspensionReason: reason.trim().slice(0, 500) || 'مخالفة شروط الاستخدام',
+      updatedAt: serverTimestamp(),
+    });
+    const commSnap = await getDoc(commercialRef);
+    if (commSnap.exists()) {
+      batch.update(commercialRef, {
+        status: 'suspended',
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users_public/${userId}`);
+  }
+}
+
+export async function adminUnsuspendUserInFirestore(userId: string): Promise<void> {
+  const publicRef = doc(db, 'users_public', userId);
+  const commercialRef = doc(db, 'commercial_profiles', userId);
+  try {
+    const batch = writeBatch(db);
+    batch.update(publicRef, {
+      status: 'active',
+      suspendedUntil: deleteField(),
+      suspendedUntilTs: deleteField(),
+      suspensionDays: deleteField(),
+      suspensionReason: deleteField(),
+      updatedAt: serverTimestamp(),
+    });
+    const commSnap = await getDoc(commercialRef);
+    if (commSnap.exists()) {
+      batch.update(commercialRef, {
+        status: 'active',
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users_public/${userId}`);
+  }
+}
+
+export async function adminResolveReportInFirestore(
+  reportId: string,
+  status: 'resolved' | 'dismissed'
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'reports', reportId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `reports/${reportId}`);
+  }
+}
+
+export function subscribeToPrivateCredits(
+  uid: string,
+  onCredits: (credits: number) => void
+): () => void {
+  return onSnapshot(
+    doc(db, 'users_private', uid),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        onCredits(typeof data.rewardCredits === 'number' ? Math.max(0, Math.floor(data.rewardCredits)) : 0);
+      }
+    },
+    () => {
+      // Gracefully ignore before private doc onboarding completes
+    }
+  );
+}
+
+export function subscribeToVerificationRequests(
+  uid: string,
+  hasAdminClaim: boolean,
+  onRequests: (requests: VerificationRequest[]) => void
+): () => void {
+  const q = hasAdminClaim
+    ? query(collection(db, 'verification_requests'))
+    : query(collection(db, 'verification_requests'), where('uid', '==', uid));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const loaded: VerificationRequest[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: d.id || docSnap.id,
+          uid: d.uid || '',
+          userName: d.userName || 'مستخدم هتش',
+          userAvatar: d.userAvatar || undefined,
+          accountType: resolveAccountType(d.accountType),
+          city: d.city || 'الخرطوم',
+          note: d.note || '',
+          documentUrl: d.documentUrl || undefined,
+          status: (d.status || 'pending') as VerificationRequest['status'],
+          reviewedBy: d.reviewedBy || undefined,
+          rejectionReason: d.rejectionReason || undefined,
+          createdAt: formatJoinedDate(d.createdAt),
+          updatedAt: formatJoinedDate(d.updatedAt),
+          reviewedAt: d.reviewedAt ? formatJoinedDate(d.reviewedAt) : undefined,
+        };
+      });
+      onRequests(loaded);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'verification_requests');
+    }
+  );
+}
+
+export function subscribeToCreditTransactions(
+  uid: string,
+  hasAdminClaim: boolean,
+  onTransactions: (txs: CreditTransaction[]) => void
+): () => void {
+  const q = hasAdminClaim
+    ? query(collection(db, 'credit_transactions'))
+    : query(collection(db, 'credit_transactions'), where('uid', '==', uid));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const loaded: CreditTransaction[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: d.id || docSnap.id,
+          uid: d.uid || '',
+          type: (d.type || 'admin_grant') as CreditTransaction['type'],
+          amount: Number(d.amount) || 0,
+          balanceBefore: Number(d.balanceBefore) || 0,
+          balanceAfter: Number(d.balanceAfter) || 0,
+          productId: d.productId || undefined,
+          grantedBy: d.grantedBy || undefined,
+          reason: d.reason || '',
+          createdAt: formatJoinedDate(d.createdAt),
+        };
+      });
+      onTransactions(loaded);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'credit_transactions');
+    }
+  );
+}
+
+export function subscribeToReports(
+  uid: string,
+  hasAdminClaim: boolean,
+  onReports: (reports: ReportTicket[]) => void
+): () => void {
+  const q = hasAdminClaim
+    ? query(collection(db, 'reports'))
+    : query(collection(db, 'reports'), where('reporterId', '==', uid));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const loaded: ReportTicket[] = snapshot.docs.map((docSnap) => {
+        const d = docSnap.data();
+        return {
+          id: d.id || docSnap.id,
+          reporterId: d.reporterId || '',
+          reporterName: d.reporterName || '',
+          reportedUserId: d.reportedUserId || undefined,
+          reportedUserName: d.reportedUserName || undefined,
+          reportedProductId: d.reportedProductId || undefined,
+          reportedProductTitle: d.reportedProductTitle || undefined,
+          reason: d.reason || '',
+          message: d.message || '',
+          createdAt: formatJoinedDate(d.createdAt),
+          status: (d.status || 'pending') as ReportTicket['status'],
+        };
+      });
+      onReports(loaded);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'reports');
+    }
+  );
+}
+
 export function subscribeToFirestoreCatalog(
   isSignedIn: boolean,
+  hasAdminClaim: boolean,
   onUsers: (users: User[]) => void,
   onProducts: (products: Product[]) => void
 ): () => void {
+  const productsQuery = hasAdminClaim
+    ? query(collection(db, 'products'))
+    : query(collection(db, 'products'), where('status', 'in', ['active', 'sold']));
+
   const unsubProducts = onSnapshot(
-    query(collection(db, 'products'), where('status', 'in', ['active', 'sold'])),
+    productsQuery,
     (snapshot) => {
       const loaded: Product[] = snapshot.docs.map((docSnap) => {
         const d = docSnap.data();
@@ -570,13 +1293,18 @@ export function subscribeToFirestoreCatalog(
 
   let unsubUsers = () => {};
   if (isSignedIn) {
+    const usersQuery = hasAdminClaim
+      ? query(collection(db, 'users_public'))
+      : query(collection(db, 'users_public'), where('status', '==', 'active'));
+
     unsubUsers = onSnapshot(
-      query(collection(db, 'users_public'), where('status', '==', 'active')),
+      usersQuery,
       (snapshot) => {
         const loaded: User[] = snapshot.docs.map((docSnap) => {
           const d = docSnap.data();
           const accountType = resolveAccountType(d.accountType);
           const avatar = d.businessLogo || d.avatar || DEFAULT_FALLBACK_AVATAR;
+          const susp = parseSuspendedFields(d);
           return {
             id: d.uid || docSnap.id,
             name: d.name || 'مستخدم هتش',
@@ -592,13 +1320,55 @@ export function subscribeToFirestoreCatalog(
             verifiedIdentity: Boolean(d.verifiedIdentity),
             joinedDate: formatJoinedDate(d.joinedDate),
             role: 'user',
-            status: d.status === 'suspended' ? 'suspended' : 'active',
+            status: susp.status,
+            suspendedUntil: susp.suspendedUntil,
+            suspendedUntilMs: susp.suspendedUntilMs,
+            suspensionDays: susp.status === 'suspended' ? d.suspensionDays : undefined,
+            suspensionReason: susp.status === 'suspended' ? d.suspensionReason : undefined,
           };
         });
         onUsers(loaded);
       },
       (error) => {
         handleFirestoreError(error, OperationType.LIST, 'users_public');
+      }
+    );
+  } else {
+    // Guest view: subscribe to public active commercial profiles (stores & companies)
+    const commQuery = query(
+      collection(db, 'commercial_profiles'),
+      where('status', '==', 'active'),
+      where('accountType', 'in', ['store', 'company'])
+    );
+    unsubUsers = onSnapshot(
+      commQuery,
+      (snapshot) => {
+        const loaded: User[] = snapshot.docs.map((docSnap) => {
+          const d = docSnap.data();
+          const accountType = resolveAccountType(d.accountType);
+          const avatar = d.businessLogo || d.avatar || DEFAULT_FALLBACK_AVATAR;
+          return {
+            id: d.uid || docSnap.id,
+            name: d.name || 'متجر هتش',
+            avatar,
+            businessLogo: d.businessLogo || undefined,
+            businessActivity: d.businessActivity || undefined,
+            accountType,
+            phone: '+249 910000000',
+            city: d.city || 'الخرطوم',
+            rating: typeof d.rating === 'number' ? d.rating : 5.0,
+            dealsCompleted: typeof d.dealsCompleted === 'number' ? d.dealsCompleted : 0,
+            reportsCount: typeof d.reportsCount === 'number' ? d.reportsCount : 0,
+            verifiedIdentity: Boolean(d.verifiedIdentity),
+            joinedDate: formatJoinedDate(d.joinedDate),
+            role: 'user',
+            status: 'active',
+          };
+        });
+        onUsers(loaded);
+      },
+      () => {
+        // Gracefully allow local catalog for offline/preview
       }
     );
   }

@@ -1,4 +1,4 @@
-import { AccountType, Product, resolveAccountType, SudaneseCity, User } from '../types';
+import { AccountType, isUserSuspendedActive, Product, resolveAccountType, SudaneseCity, User } from '../types';
 
 export interface CreateAccountInput {
   name: string;
@@ -18,9 +18,14 @@ export interface CreateAccountInput {
  */
 export function normalizeLegacyUser(user: User): User {
   const accountType = resolveAccountType(user.accountType);
+  const suspended = isUserSuspendedActive(user);
   return {
     ...user,
     accountType,
+    verifiedIdentity: Boolean(user.verifiedIdentity),
+    hasAdminClaim: Boolean(user.hasAdminClaim),
+    isAdminDoc: Boolean(user.isAdminDoc),
+    status: suspended ? 'suspended' : 'active',
     avatar: user.businessLogo || user.avatar,
   };
 }
@@ -109,6 +114,13 @@ export function applyUserProfileUpdate(
     verifiedIdentity: current.verifiedIdentity,
     joinedDate: current.joinedDate,
     role: current.role,
+    hasAdminClaim: current.hasAdminClaim,
+    isAdminDoc: current.isAdminDoc,
+    status: current.status,
+    suspendedUntil: current.suspendedUntil,
+    suspendedUntilMs: current.suspendedUntilMs,
+    suspensionDays: current.suspensionDays,
+    suspensionReason: current.suspensionReason,
     accountType: nextType,
     avatar: nextAvatar,
     businessLogo: nextLogo,
@@ -150,13 +162,14 @@ export function enrichProductWithSellerIdentity(
   const accountType = resolveAccountType(seller.accountType);
   return {
     ...productData,
+    featured: false,
     sellerId: seller.id,
     sellerName: seller.name,
     sellerAvatar: seller.businessLogo || seller.avatar,
     sellerPhone: seller.phone,
     sellerRating: seller.rating,
     sellerDealsCount: seller.dealsCompleted,
-    sellerVerified: seller.verifiedIdentity,
+    sellerVerified: Boolean(seller.verifiedIdentity),
     sellerAccountType: accountType,
     sellerBusinessActivity:
       accountType === 'personal' ? undefined : seller.businessActivity,

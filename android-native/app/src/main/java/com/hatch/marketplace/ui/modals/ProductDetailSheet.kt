@@ -107,6 +107,8 @@ fun ProductDetailSheet(
     isFavorite: Boolean,
     isOwner: Boolean,
     isSignedIn: Boolean = true,
+    canRateSeller: Boolean = false,
+    eligibleReviewConversationId: String? = null,
     sellerReviews: List<UserReview>,
     sponsoredAds: List<SponsoredAdItem>,
     adConfig: AdMobConfig,
@@ -387,7 +389,7 @@ fun ProductDetailSheet(
                                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                                             Text(product.sellerName, color = HatchTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                                             if (product.sellerVerified) {
-                                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Rounded.Verified, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
                                             }
                                             if (isCommercialSeller) {
                                                 BadgePill(
@@ -412,7 +414,7 @@ fun ProductDetailSheet(
                                         )
                                     }
                                 }
-                                if (!isOwner) {
+                                if (canRateSeller) {
                                     OutlinedButton(
                                         onClick = {
                                             onOpenReview(
@@ -421,6 +423,7 @@ fun ProductDetailSheet(
                                                     sellerName = product.sellerName,
                                                     sellerAvatar = product.sellerAvatar,
                                                     productId = product.id,
+                                                    conversationId = eligibleReviewConversationId,
                                                     productTitle = title
                                                 )
                                             )

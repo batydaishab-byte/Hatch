@@ -135,6 +135,8 @@ export interface User {
   verifiedIdentity: boolean;
   joinedDate: string;
   role: 'user' | 'admin';
+  hasAdminClaim?: boolean;
+  isAdminDoc?: boolean;
   accountType?: AccountType;
   businessActivity?: string;
   businessLogo?: string;
@@ -142,16 +144,105 @@ export interface User {
   profileCompleted?: boolean;
   status?: 'active' | 'suspended';
   suspendedUntil?: string;
+  suspendedUntilMs?: number;
   suspensionDays?: number;
   suspensionReason?: string;
-  suspendedAt?: string;
+  lastSoldProductId?: string;
 }
 
-export const isUserVerified = (dealsCompleted: number, reportsCount: number = 0): boolean => {
-  return dealsCompleted >= 10 && reportsCount === 0;
+export const isUserSuspendedActive = (
+  user?: Pick<User, 'status' | 'suspendedUntil' | 'suspendedUntilMs'> | null
+): boolean => {
+  if (!user || user.status !== 'suspended') return false;
+  if (typeof user.suspendedUntilMs === 'number') {
+    return user.suspendedUntilMs > Date.now();
+  }
+  if (user.suspendedUntil) {
+    const parsed = Date.parse(user.suspendedUntil);
+    if (!Number.isNaN(parsed)) {
+      return parsed > Date.now();
+    }
+  }
+  return true;
 };
 
+export const isAdminUser = (
+  user?: Pick<User, 'role' | 'hasAdminClaim' | 'isAdminDoc'> | null,
+  hasFirebaseSession: boolean = false
+): boolean => {
+  if (!user) return false;
+  if (hasFirebaseSession) {
+    return Boolean(user.hasAdminClaim || user.isAdminDoc);
+  }
+  return user.role === 'admin';
+};
+
+export type VerificationRequestStatus = 'pending' | 'approved' | 'rejected' | 'revoked';
+
+export interface VerificationRequest {
+  id: string;
+  uid: string;
+  userName: string;
+  userAvatar?: string;
+  accountType: AccountType;
+  city: string;
+  note: string;
+  documentUrl?: string;
+  status: VerificationRequestStatus;
+  reviewedBy?: string;
+  rejectionReason?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt?: string;
+}
+
+export type CreditTransactionType = 'admin_grant' | 'system_reward' | 'ad_boost_spend';
+
+export interface CreditTransaction {
+  id: string;
+  uid: string;
+  type: CreditTransactionType;
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  productId?: string;
+  grantedBy?: string;
+  reason: string;
+  createdAt: string;
+}
+
 export type OfferStatus = 'pending' | 'accepted' | 'declined' | 'countered';
+
+export const canTransitionOffer = (
+  currentStatus: OfferStatus | 'none' | undefined,
+  nextStatus: OfferStatus,
+  actorUid: string,
+  buyerId: string,
+  sellerId: string
+): boolean => {
+  if (!actorUid || actorUid !== buyerId && actorUid !== sellerId) return false;
+  const status = currentStatus || 'none';
+  if (status === 'accepted') return false;
+  if (nextStatus === 'pending') {
+    return actorUid === buyerId && ['none', 'declined', 'pending', 'countered'].includes(status);
+  }
+  if (nextStatus === 'countered') {
+    return actorUid === sellerId && status === 'pending';
+  }
+  if (nextStatus === 'accepted') {
+    return (
+      (actorUid === sellerId && status === 'pending') ||
+      (actorUid === buyerId && status === 'countered')
+    );
+  }
+  if (nextStatus === 'declined') {
+    return (
+      (actorUid === sellerId && status === 'pending') ||
+      (actorUid === buyerId && status === 'countered')
+    );
+  }
+  return false;
+};
 
 export interface Offer {
   id: string;
@@ -165,6 +256,9 @@ export interface Offer {
   offeredPrice: number;
   counterPrice?: number;
   status: OfferStatus;
+  offerUpdatedBy?: string;
+  acceptedBy?: string;
+  acceptedAt?: string;
   createdAt: string;
 }
 
@@ -224,7 +318,7 @@ export interface ReportTicket {
   reason: string;
   message: string;
   createdAt: string;
-  status: 'pending' | 'reviewed' | 'resolved';
+  status: 'pending' | 'reviewed' | 'resolved' | 'dismissed';
 }
 
 export type ActiveTab = 'swipe' | 'browse' | 'sell' | 'messages' | 'favorites' | 'profile' | 'admin';

@@ -244,7 +244,7 @@ fun BusinessProfileModal(
                                             modifier = Modifier.weight(1f, fill = false)
                                         )
                                         if (verified) {
-                                            Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchEmerald400, modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchAmber400, modifier = Modifier.size(18.dp))
                                         }
                                     }
 
@@ -641,7 +641,7 @@ private fun CommercialDirectoryCard(
                         Icon(
                             Icons.Rounded.Verified,
                             contentDescription = strings.verifiedBadge,
-                            tint = HatchEmerald400,
+                            tint = HatchAmber400,
                             modifier = Modifier.size(16.dp)
                         )
                     }

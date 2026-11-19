@@ -5,8 +5,11 @@ import com.google.firebase.firestore.Query
 import com.hatch.marketplace.data.model.ChatMessage
 import com.hatch.marketplace.data.model.Conversation
 import com.hatch.marketplace.data.model.HatchFormatters
+import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.OfferStatus
+import com.hatch.marketplace.data.model.OfferTransitionAction
 import com.hatch.marketplace.data.model.Product
+import com.hatch.marketplace.data.model.ProductStatus
 import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import kotlinx.coroutines.channels.awaitClose
@@ -21,7 +24,7 @@ import javax.inject.Singleton
 class ChatRepository @Inject constructor(
     private val clients: FirebaseClientsHolder
 ) {
-    fun observeConversations(userId: String?, isVerifiedAdminEmail: Boolean): Flow<List<Conversation>> = callbackFlow {
+    fun observeConversations(userId: String?, hasAdminClaim: Boolean): Flow<List<Conversation>> = callbackFlow {
         val db = clients.firestore
         if (db == null || userId.isNullOrBlank() || clients.auth?.currentUser == null) {
             trySend(emptyList())
@@ -29,7 +32,7 @@ class ChatRepository @Inject constructor(
             return@callbackFlow
         }
 
-        val query = if (isVerifiedAdminEmail) {
+        val query = if (hasAdminClaim) {
             db.collection("conversations")
         } else {
             db.collection("conversations").whereArrayContains("participantIds", userId)
@@ -82,14 +85,14 @@ class ChatRepository @Inject constructor(
                 "productId" to product.id,
                 "productTitle" to product.titleAr.ifBlank { product.titleEn }.take(140),
                 "productPrice" to product.price,
-                "productImage" to product.images.firstOrNull().orEmpty(),
+                "productImage" to product.images.firstOrNull().orEmpty().take(1000),
                 "buyerId" to buyer.uid,
                 "sellerId" to product.sellerId,
                 "participantIds" to listOf(buyer.uid, product.sellerId),
                 "buyerName" to buyer.name.take(80),
-                "buyerAvatar" to buyer.avatar,
+                "buyerAvatar" to buyer.avatar.take(1000),
                 "sellerName" to product.sellerName.take(80),
-                "sellerAvatar" to product.sellerAvatar,
+                "sellerAvatar" to product.sellerAvatar.take(1000),
                 "lastMessage" to "",
                 "unreadByBuyer" to 0,
                 "unreadBySeller" to 0,
@@ -170,30 +173,65 @@ class ChatRepository @Inject constructor(
         val msgId = HatchFormatters.sanitizeFirestoreId("msg_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val convRef = db.collection("conversations").document(conversation.id)
         val msgRef = convRef.collection("messages").document(msgId)
+        val productRef = db.collection("products").document(conversation.productId)
 
-        msgRef.set(
-            hashMapOf<String, Any>(
-                "id" to msgId,
-                "senderId" to senderId,
-                "text" to msgText,
-                "status" to "sent",
-                "isOfferUpdate" to true,
-                "offerAmount" to amount,
-                "createdAt" to FieldValue.serverTimestamp()
-            )
-        ).await()
+        db.runTransaction { tx ->
+            val convSnap = tx.get(convRef)
+            val prodSnap = tx.get(productRef)
+            require(convSnap.exists()) { "Conversation not found." }
+            val prodStatus = prodSnap.getString("status") ?: ProductStatus.SOLD.wireValue
+            val currentOfferStatus = convSnap.getString("offerStatus") ?: OfferStatus.NONE.wireValue
+            val buyerId = convSnap.getString("buyerId").orEmpty()
+            val sellerId = convSnap.getString("sellerId").orEmpty()
+            val nextStatus = MarketplaceLogic.validateOfferTransition(
+                currentStatus = currentOfferStatus,
+                actorUid = senderId,
+                buyerId = buyerId,
+                sellerId = sellerId,
+                action = OfferTransitionAction.SUBMIT_OFFER,
+                amount = amount,
+                productStatus = prodStatus
+            ).getOrThrow()
 
-        val senderIsBuyer = senderId == conversation.buyerId
-        convRef.update(
-            hashMapOf<String, Any>(
-                "lastMessage" to msgText.take(120),
-                "offerAmount" to amount,
-                "offerStatus" to OfferStatus.PENDING.wireValue,
-                "unreadByBuyer" to if (senderIsBuyer) 0 else conversation.unreadByBuyer + 1,
-                "unreadBySeller" to if (senderIsBuyer) conversation.unreadBySeller + 1 else 0,
-                "updatedAt" to FieldValue.serverTimestamp()
+            val unreadBuyer = (convSnap.getLong("unreadByBuyer") ?: 0L).toInt()
+            val unreadSeller = (convSnap.getLong("unreadBySeller") ?: 0L).toInt()
+            @Suppress("UNCHECKED_CAST")
+            val existingHistory = (convSnap.get("offerHistory") as? List<Map<String, Any>>).orEmpty()
+            require(existingHistory.size < 30) { "Maximum offer negotiation history reached for this conversation." }
+            val newHistoryEntry = mapOf<String, Any>(
+                "actorId" to senderId,
+                "status" to nextStatus.wireValue,
+                "amount" to amount,
+                "atMillis" to System.currentTimeMillis()
             )
-        ).await()
+            val nextHistory = existingHistory + newHistoryEntry
+
+            tx.update(
+                convRef,
+                hashMapOf<String, Any>(
+                    "lastMessage" to msgText.take(120),
+                    "offerAmount" to amount,
+                    "offerStatus" to nextStatus.wireValue,
+                    "offerUpdatedBy" to senderId,
+                    "offerHistory" to nextHistory,
+                    "unreadByBuyer" to 0,
+                    "unreadBySeller" to (unreadSeller + 1),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            tx.set(
+                msgRef,
+                hashMapOf<String, Any>(
+                    "id" to msgId,
+                    "senderId" to senderId,
+                    "text" to msgText,
+                    "status" to "sent",
+                    "isOfferUpdate" to true,
+                    "offerAmount" to amount,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }.await()
     }
 
     suspend fun respondToOffer(
@@ -205,44 +243,101 @@ class ChatRepository @Inject constructor(
         val db = clients.firestore ?: error("Firestore unavailable")
         val authUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
         require(authUid == responderId) { "Authenticated user mismatch." }
+
+        val action = when (newStatus) {
+            OfferStatus.ACCEPTED -> OfferTransitionAction.ACCEPT_OFFER
+            OfferStatus.DECLINED -> OfferTransitionAction.DECLINE_OFFER
+            OfferStatus.COUNTERED -> OfferTransitionAction.COUNTER_OFFER
+            else -> error("Invalid offer response action.")
+        }
+
         val msgId = HatchFormatters.sanitizeFirestoreId("msg_${UUID.randomUUID().toString().replace("-", "").take(16)}")
         val convRef = db.collection("conversations").document(conversation.id)
         val msgRef = convRef.collection("messages").document(msgId)
+        val productRef = db.collection("products").document(conversation.productId)
 
-        val summary = when (newStatus) {
-            OfferStatus.ACCEPTED -> "تم قبول العرض (${conversation.offerAmount?.toLong() ?: 0} ج.س)"
-            OfferStatus.DECLINED -> "تم رفض العرض"
-            OfferStatus.COUNTERED -> "عرض مضاد: ${counterAmount?.toLong() ?: 0} ج.س"
-            else -> "تحديث العرض"
-        }
+        db.runTransaction { tx ->
+            val convSnap = tx.get(convRef)
+            val prodSnap = tx.get(productRef)
+            require(convSnap.exists()) { "Conversation not found." }
+            val prodStatus = prodSnap.getString("status") ?: ProductStatus.SOLD.wireValue
+            val currentOfferStatus = convSnap.getString("offerStatus") ?: OfferStatus.NONE.wireValue
+            val buyerId = convSnap.getString("buyerId").orEmpty()
+            val sellerId = convSnap.getString("sellerId").orEmpty()
+            val currentOfferAmt = convSnap.getDouble("offerAmount")
+            val currentCounterAmt = convSnap.getDouble("counterAmount")
 
-        val msgPayload = hashMapOf<String, Any>(
-            "id" to msgId,
-            "senderId" to responderId,
-            "text" to summary,
-            "status" to "sent",
-            "isOfferUpdate" to true,
-            "createdAt" to FieldValue.serverTimestamp()
-        )
-        if (counterAmount != null && counterAmount > 0.0) {
-            msgPayload["offerAmount"] = counterAmount
-        } else if (conversation.offerAmount != null && conversation.offerAmount > 0.0) {
-            msgPayload["offerAmount"] = conversation.offerAmount
-        }
-        msgRef.set(msgPayload).await()
+            val validatedStatus = MarketplaceLogic.validateOfferTransition(
+                currentStatus = currentOfferStatus,
+                actorUid = responderId,
+                buyerId = buyerId,
+                sellerId = sellerId,
+                action = action,
+                amount = counterAmount,
+                productStatus = prodStatus
+            ).getOrThrow()
 
-        val responderIsBuyer = responderId == conversation.buyerId
-        val convUpdates = hashMapOf<String, Any>(
-            "lastMessage" to summary.take(120),
-            "offerStatus" to newStatus.wireValue,
-            "unreadByBuyer" to if (responderIsBuyer) 0 else conversation.unreadByBuyer + 1,
-            "unreadBySeller" to if (responderIsBuyer) conversation.unreadBySeller + 1 else 0,
-            "updatedAt" to FieldValue.serverTimestamp()
-        )
-        if (counterAmount != null && counterAmount > 0.0) {
-            convUpdates["counterAmount"] = counterAmount
-        }
-        convRef.update(convUpdates).await()
+            val effectiveAmount = when (validatedStatus) {
+                OfferStatus.COUNTERED -> counterAmount
+                OfferStatus.ACCEPTED -> if (currentOfferStatus == OfferStatus.COUNTERED.wireValue) currentCounterAmt else currentOfferAmt
+                else -> currentOfferAmt
+            }
+            val summary = when (validatedStatus) {
+                OfferStatus.ACCEPTED -> "تم قبول العرض (${effectiveAmount?.toLong() ?: 0} ج.س)"
+                OfferStatus.DECLINED -> "تم رفض العرض"
+                OfferStatus.COUNTERED -> "عرض مضاد: ${counterAmount?.toLong() ?: 0} ج.س"
+                else -> "تحديث العرض"
+            }
+
+            val unreadBuyer = (convSnap.getLong("unreadByBuyer") ?: 0L).toInt()
+            val unreadSeller = (convSnap.getLong("unreadBySeller") ?: 0L).toInt()
+            val responderIsBuyer = responderId == buyerId
+
+            @Suppress("UNCHECKED_CAST")
+            val existingHistory = (convSnap.get("offerHistory") as? List<Map<String, Any>>).orEmpty()
+            require(existingHistory.size < 30) { "Maximum offer negotiation history reached for this conversation." }
+            val entry = hashMapOf<String, Any>(
+                "actorId" to responderId,
+                "status" to validatedStatus.wireValue,
+                "atMillis" to System.currentTimeMillis()
+            )
+            if (effectiveAmount != null && effectiveAmount > 0.0) {
+                entry["amount"] = effectiveAmount
+            }
+            val nextHistory = existingHistory + entry
+
+            val convUpdates = hashMapOf<String, Any>(
+                "lastMessage" to summary.take(120),
+                "offerStatus" to validatedStatus.wireValue,
+                "offerUpdatedBy" to responderId,
+                "offerHistory" to nextHistory,
+                "unreadByBuyer" to if (responderIsBuyer) 0 else unreadBuyer + 1,
+                "unreadBySeller" to if (responderIsBuyer) unreadSeller + 1 else 0,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (validatedStatus == OfferStatus.COUNTERED && counterAmount != null && counterAmount > 0.0) {
+                convUpdates["counterAmount"] = counterAmount
+            }
+            if (validatedStatus == OfferStatus.ACCEPTED) {
+                convUpdates["acceptedBy"] = responderId
+                convUpdates["acceptedAt"] = FieldValue.serverTimestamp()
+            }
+
+            val msgPayload = hashMapOf<String, Any>(
+                "id" to msgId,
+                "senderId" to responderId,
+                "text" to summary,
+                "status" to "sent",
+                "isOfferUpdate" to true,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            if (effectiveAmount != null && effectiveAmount > 0.0) {
+                msgPayload["offerAmount"] = effectiveAmount
+            }
+
+            tx.update(convRef, convUpdates)
+            tx.set(msgRef, msgPayload)
+        }.await()
     }
 
     suspend fun markConversationRead(conversation: Conversation, readerUid: String, messages: List<ChatMessage>) {
@@ -300,16 +395,22 @@ class ChatRepository @Inject constructor(
         if (!audioUrl.isNullOrBlank()) payload["audioUrl"] = audioUrl.take(1000)
         if (audioDuration != null) payload["audioDuration"] = audioDuration.coerceIn(0, 600)
 
-        msgRef.set(payload).await()
-
-        val senderIsBuyer = senderId == conversation.buyerId
-        convRef.update(
-            mapOf(
-                "lastMessage" to lastMessageSummary.take(500),
-                "unreadByBuyer" to if (senderIsBuyer) 0 else conversation.unreadByBuyer + 1,
-                "unreadBySeller" to if (senderIsBuyer) conversation.unreadBySeller + 1 else 0,
-                "updatedAt" to FieldValue.serverTimestamp()
+        db.runTransaction { tx ->
+            val convSnap = tx.get(convRef)
+            val buyerId = convSnap.getString("buyerId") ?: conversation.buyerId
+            val senderIsBuyer = senderId == buyerId
+            val unreadBuyer = (convSnap.getLong("unreadByBuyer") ?: 0L).toInt()
+            val unreadSeller = (convSnap.getLong("unreadBySeller") ?: 0L).toInt()
+            tx.set(msgRef, payload)
+            tx.update(
+                convRef,
+                mapOf(
+                    "lastMessage" to lastMessageSummary.take(500),
+                    "unreadByBuyer" to if (senderIsBuyer) 0 else unreadBuyer + 1,
+                    "unreadBySeller" to if (senderIsBuyer) unreadSeller + 1 else 0,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
             )
-        ).await()
+        }.await()
     }
 }

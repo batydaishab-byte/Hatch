@@ -240,7 +240,7 @@ fun ProductCard(
                         )
                     }
                     if (product.sellerVerified) {
-                        Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchEmerald400, modifier = Modifier.size(12.dp))
+                        Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchAmber400, modifier = Modifier.size(12.dp))
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
