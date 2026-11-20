@@ -969,7 +969,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Validate Firestore connectivity & observe Firebase Google Sign-In state
   useEffect(() => {
-    testFirestoreConnection();
+    void testFirestoreConnection().catch(() => {
+      // Connectivity check is best-effort and must not surface startup errors
+    });
 
     const unsubAuth = subscribeToAuthState(async (fbUser) => {
       setFirebaseUser(fbUser);
@@ -1002,7 +1004,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setIsCreateAccountOpen(true);
         }
       } catch (err) {
-        console.error('Error checking Firestore user profile after auth:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('permission-denied') && !msg.includes('Missing or insufficient permissions')) {
+          console.error('Error checking Firestore user profile after auth:', err);
+        }
       }
     });
 
@@ -1013,7 +1018,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Subscribe to Firestore catalog updates cleanly and merge with local/mock items
   useEffect(() => {
-    const hasAdminClaim = Boolean(firebaseUser && currentUser.hasAdminClaim);
+    const hasAdminClaim = Boolean(
+      firebaseUser && currentUser.id === firebaseUser.uid && currentUser.hasAdminClaim
+    );
     const unsubCatalog = subscribeToFirestoreCatalog(
       Boolean(firebaseUser),
       hasAdminClaim,

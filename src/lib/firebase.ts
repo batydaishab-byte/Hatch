@@ -11,7 +11,6 @@ import {
   getFirestore,
   doc,
   getDoc,
-  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -19,7 +18,9 @@ import {
   collection,
   query,
   where,
+  limit,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   serverTimestamp,
   writeBatch,
@@ -145,10 +146,23 @@ export async function testFirestoreConnection(): Promise<void> {
   if (connectionTested) return;
   connectionTested = true;
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocsFromServer(
+      query(
+        collection(db, 'products'),
+        where('status', 'in', ['active', 'sold']),
+        limit(1)
+      )
+    );
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration. The client is offline.');
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code)
+        : '';
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('the client is offline')) {
+      console.warn('Firestore connection check: client is offline, using cached catalog.');
+    } else if (code !== 'permission-denied') {
+      console.warn('Firestore connection check skipped:', message);
     }
   }
 }
