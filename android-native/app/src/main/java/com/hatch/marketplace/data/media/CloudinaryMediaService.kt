@@ -136,10 +136,6 @@ class CloudinaryMediaService @Inject constructor(
                 val code = conn.responseCode
                 val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.readText().orEmpty()
-                if (code == 401 || code == 403) {
-                    // Sync FirebaseAuth IdTokenListener if admin claim was revoked server-side.
-                    runCatching { requireFirebaseIdToken(forceRefresh = true) }
-                }
                 require(code in 200..299) { "Quota check failed ($code): $body" }
                 json.decodeFromString<CloudinaryQuotaStatus>(body)
             }

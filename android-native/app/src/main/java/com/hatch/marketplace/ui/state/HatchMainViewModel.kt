@@ -42,13 +42,18 @@ import com.hatch.marketplace.data.repository.ProductRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -133,10 +138,10 @@ data class HatchUiState(
         get() = MarketplaceLogic.mergeUsersAndCommercialProfiles(allUsers, commercialProfiles, currentUser)
 
     val isSignedIn: Boolean
-        get() = auth.firebaseUser != null
+        get() = auth.isSignedIn
 
     val isOnboardingRequired: Boolean
-        get() = auth.firebaseUser != null && (auth.needsProfileOnboarding || forceOnboardingStep)
+        get() = auth.isSignedIn && (auth.needsProfileOnboarding || forceOnboardingStep)
 
     val isAdmin: Boolean
         get() = auth.isAdmin
@@ -161,7 +166,7 @@ data class HatchUiState(
 
     val unreadChatsCount: Int
         get() {
-            val uid = auth.firebaseUser?.uid ?: return 0
+            val uid = auth.uid ?: return 0
             return conversations.sumOf { conv ->
                 if (conv.buyerId == uid) conv.unreadByBuyer else conv.unreadBySeller
             }
@@ -178,7 +183,7 @@ data class HatchUiState(
 
     val myLatestVerificationRequest: VerificationRequest?
         get() {
-            val uid = auth.firebaseUser?.uid ?: return null
+            val uid = auth.uid ?: return null
             return verificationRequests.firstOrNull { it.uid == uid }
         }
 
@@ -189,17 +194,78 @@ data class HatchUiState(
         get() = MarketplaceLogic.computeRevenueStats(sponsoredAds, adConfig)
 }
 
+internal data class HatchViewModelStreams(
+    val observeProducts: (String?, Boolean) -> Flow<List<Product>> = { _, _ -> flowOf(emptyList()) },
+    val observeFavoriteIds: (String?) -> Flow<Set<String>> = { _ -> flowOf(emptySet()) },
+    val observeConversations: (String?, Boolean) -> Flow<List<Conversation>> = { _, _ -> flowOf(emptyList()) },
+    val observeMessages: (String?) -> Flow<List<ChatMessage>> = { _ -> flowOf(emptyList()) },
+    val observeNotifications: (String?) -> Flow<List<NotificationItem>> = { _ -> flowOf(emptyList()) },
+    val observeReviews: () -> Flow<List<UserReview>> = { flowOf(emptyList()) },
+    val observeReports: (String?, Boolean) -> Flow<List<ReportTicket>> = { _, _ -> flowOf(emptyList()) },
+    val observeVerificationRequests: (String?, Boolean) -> Flow<List<VerificationRequest>> = { _, _ -> flowOf(emptyList()) },
+    val observeCreditTransactions: (String?, Boolean) -> Flow<List<CreditTransaction>> = { _, _ -> flowOf(emptyList()) },
+    val observePublicUsers: (Boolean, Boolean) -> Flow<List<PublicUser>> = { _, _ -> flowOf(emptyList()) },
+    val observeCommercialProfiles: (Boolean) -> Flow<List<PublicUser>> = { _ -> flowOf(emptyList()) },
+    val observeSponsoredAds: (Boolean) -> Flow<List<SponsoredAdItem>> = { _ -> flowOf(emptyList()) },
+    val observeAdConfig: (Boolean) -> Flow<AdMobConfig> = { _ -> flowOf(AdMobConfig()) },
+    val languageOverrideFlow: Flow<AppLanguage?> = flowOf(null),
+    val selectedCityFlow: Flow<String> = flowOf("all"),
+    val searchHistoryFlow: Flow<List<String>> = flowOf(emptyList()),
+    val isOnlineFlow: Flow<Boolean> = flowOf(true),
+    val fetchAdminQuotaStatus: suspend (Boolean) -> Result<CloudinaryQuotaStatus> = {
+        Result.success(CloudinaryQuotaStatus())
+    }
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
-class HatchMainViewModel @Inject constructor(
+class HatchMainViewModel internal constructor(
     private val authRepo: AuthRepository,
-    private val productRepo: ProductRepository,
-    private val interactionRepo: InteractionRepository,
-    private val chatRepo: ChatRepository,
-    private val monetizationRepo: MonetizationRepository,
-    private val prefs: HatchPreferences,
-    private val networkMonitor: NetworkMonitor
+    private val productRepo: ProductRepository?,
+    private val interactionRepo: InteractionRepository?,
+    private val chatRepo: ChatRepository?,
+    private val monetizationRepo: MonetizationRepository?,
+    private val prefs: HatchPreferences?,
+    private val streams: HatchViewModelStreams
 ) : ViewModel() {
+
+    @Inject
+    constructor(
+        authRepo: AuthRepository,
+        productRepo: ProductRepository,
+        interactionRepo: InteractionRepository,
+        chatRepo: ChatRepository,
+        monetizationRepo: MonetizationRepository,
+        prefs: HatchPreferences,
+        networkMonitor: NetworkMonitor
+    ) : this(
+        authRepo = authRepo,
+        productRepo = productRepo,
+        interactionRepo = interactionRepo,
+        chatRepo = chatRepo,
+        monetizationRepo = monetizationRepo,
+        prefs = prefs,
+        streams = HatchViewModelStreams(
+            observeProducts = productRepo::observeProducts,
+            observeFavoriteIds = interactionRepo::observeFavoriteIds,
+            observeConversations = chatRepo::observeConversations,
+            observeMessages = chatRepo::observeMessages,
+            observeNotifications = interactionRepo::observeNotifications,
+            observeReviews = interactionRepo::observeReviews,
+            observeReports = interactionRepo::observeReports,
+            observeVerificationRequests = interactionRepo::observeVerificationRequests,
+            observeCreditTransactions = interactionRepo::observeCreditTransactions,
+            observePublicUsers = authRepo::observePublicUsers,
+            observeCommercialProfiles = authRepo::observeCommercialProfiles,
+            observeSponsoredAds = monetizationRepo::observeSponsoredAds,
+            observeAdConfig = monetizationRepo::observeAdConfig,
+            languageOverrideFlow = prefs.languageOverrideFlow,
+            selectedCityFlow = prefs.selectedCityFlow,
+            searchHistoryFlow = prefs.searchHistoryFlow,
+            isOnlineFlow = networkMonitor.isOnlineFlow,
+            fetchAdminQuotaStatus = monetizationRepo::fetchAdminQuotaStatus
+        )
+    )
 
     private val _localState = MutableStateFlow(HatchUiState())
     private val _activeConversationId = MutableStateFlow<String?>(null)
@@ -208,57 +274,96 @@ class HatchMainViewModel @Inject constructor(
     )
     private var productViewsBeforeAd = 0
 
+    // Single shared AuthSession flow across all ViewModel collectors & repository flatMapLatest streams.
     private val authSessionFlow = authRepo.observeAuthSession()
+        .shareIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            replay = 1
+        )
 
-    private val productsFlow = authSessionFlow.flatMapLatest { session ->
-        productRepo.observeProducts(session.firebaseUser?.uid, session.hasAdminClaim)
-    }
+    private val productsFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observeProducts(uid, hasAdminClaim)
+        }
 
-    private val favoritesFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeFavoriteIds(session.firebaseUser?.uid)
-    }
+    private val favoritesFlow = authSessionFlow
+        .map { it.uid }
+        .distinctUntilChanged()
+        .flatMapLatest { uid ->
+            streams.observeFavoriteIds(uid)
+        }
 
-    private val conversationsFlow = authSessionFlow.flatMapLatest { session ->
-        chatRepo.observeConversations(session.firebaseUser?.uid, session.hasAdminClaim)
-    }
+    private val conversationsFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observeConversations(uid, hasAdminClaim)
+        }
 
     private val activeMessagesFlow = _activeConversationId.flatMapLatest { convId ->
-        chatRepo.observeMessages(convId)
+        streams.observeMessages(convId)
     }
 
-    private val notificationsFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeNotifications(session.firebaseUser?.uid)
-    }
+    private val notificationsFlow = authSessionFlow
+        .map { it.uid }
+        .distinctUntilChanged()
+        .flatMapLatest { uid ->
+            streams.observeNotifications(uid)
+        }
 
-    private val reviewsFlow = interactionRepo.observeReviews()
+    private val reviewsFlow = streams.observeReviews()
 
-    private val reportsFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeReports(session.firebaseUser?.uid, session.hasAdminClaim)
-    }
+    private val reportsFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observeReports(uid, hasAdminClaim)
+        }
 
-    private val verificationRequestsFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeVerificationRequests(session.firebaseUser?.uid, session.hasAdminClaim)
-    }
+    private val verificationRequestsFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observeVerificationRequests(uid, hasAdminClaim)
+        }
 
-    private val creditTransactionsFlow = authSessionFlow.flatMapLatest { session ->
-        interactionRepo.observeCreditTransactions(session.firebaseUser?.uid, session.hasAdminClaim)
-    }
+    private val creditTransactionsFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observeCreditTransactions(uid, hasAdminClaim)
+        }
 
-    private val usersFlow = authSessionFlow.flatMapLatest { session ->
-        authRepo.observePublicUsers(session.firebaseUser != null, session.hasAdminClaim)
-    }
+    private val usersFlow = authSessionFlow
+        .map { it.uid to it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { (uid, hasAdminClaim) ->
+            streams.observePublicUsers(uid != null, hasAdminClaim)
+        }
 
-    private val commercialProfilesFlow = authSessionFlow.flatMapLatest { session ->
-        authRepo.observeCommercialProfiles(session.hasAdminClaim)
-    }
+    private val commercialProfilesFlow = authSessionFlow
+        .map { it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { hasAdminClaim ->
+            streams.observeCommercialProfiles(hasAdminClaim)
+        }
 
-    private val sponsoredAdsFlow = authSessionFlow.flatMapLatest { session ->
-        monetizationRepo.observeSponsoredAds(session.hasAdminClaim)
-    }
+    private val sponsoredAdsFlow = authSessionFlow
+        .map { it.hasAdminClaim }
+        .distinctUntilChanged()
+        .flatMapLatest { hasAdminClaim ->
+            streams.observeSponsoredAds(hasAdminClaim)
+        }
 
-    private val adConfigFlow = authSessionFlow.flatMapLatest { session ->
-        monetizationRepo.observeAdConfig(session.firebaseUser != null)
-    }
+    private val adConfigFlow = authSessionFlow
+        .map { it.isSignedIn }
+        .distinctUntilChanged()
+        .flatMapLatest { isSignedIn ->
+            streams.observeAdConfig(isSignedIn)
+        }
 
     private data class CoreStreams(
         val auth: AuthSessionState,
@@ -332,7 +437,7 @@ class HatchMainViewModel @Inject constructor(
     }
 
     private val effectiveLanguageFlow = combine(
-        prefs.languageOverrideFlow,
+        streams.languageOverrideFlow,
         _systemLanguage
     ) { manual, system ->
         manual ?: system
@@ -341,9 +446,9 @@ class HatchMainViewModel @Inject constructor(
     private val settingsCombined = combine(
         adConfigFlow,
         effectiveLanguageFlow,
-        prefs.selectedCityFlow,
-        prefs.searchHistoryFlow,
-        networkMonitor.isOnlineFlow
+        streams.selectedCityFlow,
+        streams.searchHistoryFlow,
+        streams.isOnlineFlow
     ) { adCfg, lang, city, history, online ->
         SettingsStreams(adCfg, lang, city, history, online)
     }
@@ -407,7 +512,7 @@ class HatchMainViewModel @Inject constructor(
             adConfig = settings.adConfig,
             filter = local.filter.copy(selectedCity = settings.selectedCity),
             searchHistory = settings.searchHistory,
-            showAuthSheet = local.showAuthSheet || (core.auth.firebaseUser != null && (core.auth.needsProfileOnboarding || local.forceOnboardingStep))
+            showAuthSheet = local.showAuthSheet || (core.auth.isSignedIn && (core.auth.needsProfileOnboarding || local.forceOnboardingStep))
         )
     }.stateIn(
         scope = viewModelScope,
@@ -441,14 +546,14 @@ class HatchMainViewModel @Inject constructor(
                 }
                 .collectLatest { session ->
                     val profile = session.publicProfile
-                    if (session.firebaseUser != null && profile != null) {
+                    if (session.isSignedIn && profile != null) {
                         authRepo.ensureCommercialProfileSynced(profile)
                     }
                 }
         }
         viewModelScope.launch {
             authSessionFlow
-                .distinctUntilChangedBy { it.firebaseUser?.uid to it.isAdmin }
+                .distinctUntilChangedBy { it.uid to it.isAdmin }
                 .collectLatest { session ->
                     if (!session.isAdmin) {
                         val currentLocal = _localState.value
@@ -467,6 +572,34 @@ class HatchMainViewModel @Inject constructor(
                                 if (isArabic()) "تم تحديث الجلسة: لا توجد صلاحية إدارة نشطة" else "Session updated: admin access is not active",
                                 ToastType.WARNING
                             )
+                        }
+                    }
+                }
+        }
+        viewModelScope.launch {
+            var previousUid: String? = null
+            authSessionFlow
+                .map { it.uid }
+                .distinctUntilChanged()
+                .collect { currentUid ->
+                    if (previousUid != null && previousUid != currentUid) {
+                        clearUserScopedState()
+                    }
+                    previousUid = currentUid
+                }
+        }
+        viewModelScope.launch {
+            var wasOffline = false
+            streams.isOnlineFlow
+                .distinctUntilChanged()
+                .collect { online ->
+                    if (!online) {
+                        wasOffline = true
+                    } else if (wasOffline) {
+                        wasOffline = false
+                        val currentAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+                        if (currentAuth.isSignedIn && (currentAuth.hasAdminClaim || currentAuth.hasAdminDoc)) {
+                            authRepo.refreshIdTokenClaims(forceRefresh = true)
                         }
                     }
                 }
@@ -521,11 +654,11 @@ class HatchMainViewModel @Inject constructor(
 
     fun toggleLanguage() {
         val next = if (uiState.value.language == AppLanguage.AR) AppLanguage.EN else AppLanguage.AR
-        viewModelScope.launch { prefs.setLanguage(next) }
+        viewModelScope.launch { prefs?.setLanguage(next) }
     }
 
     fun selectCity(city: String) {
-        viewModelScope.launch { prefs.setSelectedCity(city) }
+        viewModelScope.launch { prefs?.setSelectedCity(city) }
     }
 
     fun updateFilter(transform: (MarketFilterState) -> MarketFilterState) {
@@ -533,22 +666,23 @@ class HatchMainViewModel @Inject constructor(
     }
 
     fun commitSearchToHistory(query: String) {
-        viewModelScope.launch { prefs.addSearchHistory(query) }
+        viewModelScope.launch { prefs?.addSearchHistory(query) }
     }
 
     fun removeSearchHistoryItem(query: String) {
-        viewModelScope.launch { prefs.removeSearchHistoryItem(query) }
+        viewModelScope.launch { prefs?.removeSearchHistoryItem(query) }
     }
 
     fun clearSearchHistory() {
-        viewModelScope.launch { prefs.clearSearchHistory() }
+        viewModelScope.launch { prefs?.clearSearchHistory() }
     }
 
     fun triggerPullToRefresh() {
         viewModelScope.launch {
             _localState.update { it.copy(isRefreshing = true) }
             authRepo.verifyFirestoreServerConnection()
-            if (uiState.value.isSignedIn) {
+            val currentAuth = uiState.value.auth
+            if (currentAuth.isSignedIn && (currentAuth.hasAdminClaim || currentAuth.hasAdminDoc)) {
                 authRepo.refreshIdTokenClaims(forceRefresh = true)
             }
             if (uiState.value.isAdmin) refreshCloudinaryQuota()
@@ -597,7 +731,7 @@ class HatchMainViewModel @Inject constructor(
                         )
                     } else {
                         android.util.Log.d("HatchAuthFlow", "Existing user profile complete — navigating to Home")
-                        prefs.setOnboardingCompleted(true)
+                        prefs?.setOnboardingCompleted(true)
                         _localState.update {
                             it.copy(
                                 forceOnboardingStep = false,
@@ -643,7 +777,11 @@ class HatchMainViewModel @Inject constructor(
             setSubmitting(true)
             clearAuthError()
             val resolvedAvatar = if (avatarUri != null) {
-                productRepo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
+                val repo = productRepo ?: run {
+                    setSubmitting(false)
+                    return@launch
+                }
+                repo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
                     val msg = e.localizedMessage ?: if (isArabic()) "فشل رفع الصورة" else "Avatar upload failed"
                     reportAuthError(msg)
                     setSubmitting(false)
@@ -671,7 +809,7 @@ class HatchMainViewModel @Inject constructor(
             )
                 .onSuccess {
                     android.util.Log.d("HatchAuthFlow", "Onboarding profile saved — navigating to Home")
-                    prefs.setOnboardingCompleted(true)
+                    prefs?.setOnboardingCompleted(true)
                     _localState.update {
                         it.copy(
                             forceOnboardingStep = false,
@@ -702,13 +840,17 @@ class HatchMainViewModel @Inject constructor(
         businessLogo: String = ""
     ) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         val previousType = AccountType.fromWire(uiState.value.currentUser?.accountType)
         val nextType = AccountType.fromWire(accountType)
         viewModelScope.launch {
             setSubmitting(true)
             val resolvedAvatar = if (avatarUri != null) {
-                productRepo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
+                val repo = productRepo ?: run {
+                    setSubmitting(false)
+                    return@launch
+                }
+                repo.uploadSingleInspectionOrAvatarImage(avatarUri).getOrElse { e ->
                     showToast(e.localizedMessage ?: "Avatar upload failed", ToastType.ERROR)
                     setSubmitting(false)
                     return@launch
@@ -747,26 +889,50 @@ class HatchMainViewModel @Inject constructor(
 
     fun signOut() {
         authRepo.signOut()
+        clearUserScopedState()
+        _localState.update { it.copy(showAuthSheet = false) }
+        showToast(if (isArabic()) "تم تسجيل الخروج" else "Signed out", ToastType.INFO)
+    }
+
+    private fun clearUserScopedState() {
         _activeConversationId.value = null
+        productViewsBeforeAd = 0
         _localState.update {
             it.copy(
                 activeTab = MainTab.SWIPE,
+                profileSubTab = ProfileSubTab.MY_ADS,
+                adminSubTab = AdminSubTab.REPORTS,
+                passedProductIds = emptySet(),
                 activeConversationId = null,
+                readBroadcastIds = emptySet(),
+                cloudinaryQuota = CloudinaryQuotaStatus(),
+                selectedProduct = null,
                 selectedBusinessSellerId = null,
                 commercialDirectoryType = null,
                 guestPromptReason = null,
-                showEditProfileDialog = false,
+                offerTargetProduct = null,
+                editingProduct = null,
+                soldTargetProduct = null,
+                reviewRequest = null,
+                reportRequest = null,
+                adminAuditConversation = null,
+                showSellModal = false,
                 forceOnboardingStep = false,
-                authErrorMessage = null
+                authErrorMessage = null,
+                showEditProfileDialog = false,
+                showVerificationRequestDialog = false,
+                showNotificationsModal = false,
+                showInterstitialAd = null,
+                showRewardedAd = null,
+                rewardBoostTargetProductId = null
             )
         }
-        showToast(if (isArabic()) "تم تسجيل الخروج" else "Signed out", ToastType.INFO)
     }
 
     fun openProductDetail(product: Product) {
         productViewsBeforeAd++
         _localState.update { it.copy(selectedProduct = product) }
-        viewModelScope.launch { productRepo.incrementViews(product.id) }
+        viewModelScope.launch { productRepo?.incrementViews(product.id) }
 
         val config = uiState.value.adConfig
         if (config.isEnabled && productViewsBeforeAd >= 7) {
@@ -802,25 +968,25 @@ class HatchMainViewModel @Inject constructor(
     fun browseNextSwipeCard(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
         if (uiState.value.isCurrentlySuspended) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
-        viewModelScope.launch { interactionRepo.recordSwipe(uid, product.id, "right") }
+        val uid = uiState.value.auth.uid ?: return
+        viewModelScope.launch { interactionRepo?.recordSwipe(uid, product.id, "right") }
     }
 
     fun swipeLeft(product: Product) {
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
         if (uiState.value.isCurrentlySuspended) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
-        viewModelScope.launch { interactionRepo.recordSwipe(uid, product.id, "left") }
+        val uid = uiState.value.auth.uid ?: return
+        viewModelScope.launch { interactionRepo?.recordSwipe(uid, product.id, "left") }
     }
 
     fun swipeRight(product: Product) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.FAVORITES)) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         _localState.update { it.copy(passedProductIds = it.passedProductIds + product.id) }
         viewModelScope.launch {
-            interactionRepo.recordSwipe(uid, product.id, "right")
+            interactionRepo?.recordSwipe(uid, product.id, "right")
             if (!uiState.value.favoriteIds.contains(product.id)) {
-                interactionRepo.toggleFavorite(uid, product.id, currentlyFavorite = false)
+                interactionRepo?.toggleFavorite(uid, product.id, currentlyFavorite = false)
             }
             showToast(if (isArabic()) "تم الحفظ في المفضلة ❤️" else "Saved to favorites ❤️", ToastType.SUCCESS)
         }
@@ -835,11 +1001,11 @@ class HatchMainViewModel @Inject constructor(
 
     fun toggleFavorite(productId: String) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.FAVORITES)) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         val currentlyFav = uiState.value.favoriteIds.contains(productId)
         viewModelScope.launch {
-            interactionRepo.toggleFavorite(uid, productId, currentlyFav)
-                .onFailure { e -> showToast(e.localizedMessage ?: "Action failed", ToastType.ERROR) }
+            interactionRepo?.toggleFavorite(uid, productId, currentlyFav)
+                ?.onFailure { e -> showToast(e.localizedMessage ?: "Action failed", ToastType.ERROR) }
         }
     }
 
@@ -870,9 +1036,10 @@ class HatchMainViewModel @Inject constructor(
     ) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         val seller = uiState.value.currentUser ?: return
+        val repo = productRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            productRepo.createProduct(
+            repo.createProduct(
                 seller = seller,
                 titleAr = titleAr,
                 titleEn = titleEn,
@@ -924,9 +1091,10 @@ class HatchMainViewModel @Inject constructor(
         urgentSale: Boolean
     ) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
+        val repo = productRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            productRepo.updateProduct(
+            repo.updateProduct(
                 productId = productId,
                 titleAr = titleAr,
                 titleEn = titleAr,
@@ -962,10 +1130,11 @@ class HatchMainViewModel @Inject constructor(
     fun confirmMarkSold() {
         if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
         val target = uiState.value.soldTargetProduct ?: return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
+        val repo = productRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            productRepo.markProductAsSold(target.id, uid)
+            repo.markProductAsSold(target.id, uid)
                 .onSuccess {
                     _localState.update { it.copy(soldTargetProduct = null, selectedProduct = null) }
                     showToast(
@@ -980,7 +1149,7 @@ class HatchMainViewModel @Inject constructor(
 
     fun openOfferModal(product: Product) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
-        if (product.sellerId == uiState.value.auth.firebaseUser?.uid) {
+        if (product.sellerId == uiState.value.auth.uid) {
             showToast(if (isArabic()) "لا يمكنك تقديم عرض على منتجك" else "Cannot bid on your own listing", ToastType.WARNING)
             return
         }
@@ -992,9 +1161,10 @@ class HatchMainViewModel @Inject constructor(
     fun submitOffer(product: Product, amount: Double, note: String) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
         val buyer = uiState.value.currentUser ?: return
+        val repo = chatRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            chatRepo.startOrGetConversation(product, buyer)
+            repo.startOrGetConversation(product, buyer)
                 .onSuccess { convId ->
                     val tempConv = uiState.value.conversations.firstOrNull { it.id == convId }
                         ?: Conversation(
@@ -1004,7 +1174,7 @@ class HatchMainViewModel @Inject constructor(
                             sellerId = product.sellerId,
                             participantIds = listOf(buyer.uid, product.sellerId)
                         )
-                    chatRepo.sendOffer(tempConv, buyer.uid, amount, note)
+                    repo.sendOffer(tempConv, buyer.uid, amount, note)
                         .onSuccess {
                             _activeConversationId.value = convId
                             _localState.update {
@@ -1031,8 +1201,9 @@ class HatchMainViewModel @Inject constructor(
             showToast(if (isArabic()) "هذا هو إعلانك الخاص" else "This is your own listing", ToastType.INFO)
             return
         }
+        val repo = chatRepo ?: return
         viewModelScope.launch {
-            chatRepo.startOrGetConversation(product, buyer)
+            repo.startOrGetConversation(product, buyer)
                 .onSuccess { convId ->
                     _activeConversationId.value = convId
                     _localState.update {
@@ -1051,10 +1222,10 @@ class HatchMainViewModel @Inject constructor(
         _activeConversationId.value = conv?.id
         _localState.update { it.copy(activeConversationId = conv?.id) }
         if (uiState.value.isCurrentlySuspended) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         if (conv != null) {
             viewModelScope.launch {
-                chatRepo.markConversationRead(conv, uid, uiState.value.activeMessages)
+                chatRepo?.markConversationRead(conv, uid, uiState.value.activeMessages)
             }
         }
     }
@@ -1062,26 +1233,27 @@ class HatchMainViewModel @Inject constructor(
     fun sendChatMessage(text: String) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         viewModelScope.launch {
-            chatRepo.sendTextMessage(conv, uid, text)
-                .onFailure { e -> showToast(e.localizedMessage ?: "Send failed", ToastType.ERROR) }
+            chatRepo?.sendTextMessage(conv, uid, text)
+                ?.onFailure { e -> showToast(e.localizedMessage ?: "Send failed", ToastType.ERROR) }
         }
     }
 
     fun sendInspectionPhoto(uri: Uri?, directUrl: String?, tag: String, caption: String) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         viewModelScope.launch {
             setSubmitting(true)
             val resolvedUrl = when {
                 !directUrl.isNullOrBlank() -> Result.success(directUrl)
-                uri != null -> productRepo.uploadSingleInspectionOrAvatarImage(uri)
+                uri != null -> productRepo?.uploadSingleInspectionOrAvatarImage(uri)
+                    ?: Result.failure(IllegalStateException("Product repository unavailable"))
                 else -> Result.failure(IllegalArgumentException("No image selected"))
             }
             resolvedUrl.onSuccess { url ->
-                chatRepo.sendInspectionImageMessage(conv, uid, url, tag, caption)
+                chatRepo?.sendInspectionImageMessage(conv, uid, url, tag, caption)
             }.onFailure { e ->
                 showToast(e.localizedMessage ?: "Photo upload failed", ToastType.ERROR)
             }
@@ -1092,27 +1264,27 @@ class HatchMainViewModel @Inject constructor(
     fun sendVoiceNote(audioUrl: String, durationSeconds: Int) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.CONTACT_OR_BUY)) return
         val conv = currentActiveConversation() ?: return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         viewModelScope.launch {
-            chatRepo.sendVoiceMessage(conv, uid, audioUrl, durationSeconds)
-                .onFailure { e -> showToast(e.localizedMessage ?: "Voice note failed", ToastType.ERROR) }
+            chatRepo?.sendVoiceMessage(conv, uid, audioUrl, durationSeconds)
+                ?.onFailure { e -> showToast(e.localizedMessage ?: "Voice note failed", ToastType.ERROR) }
         }
     }
 
     fun respondToOffer(status: OfferStatus, counterAmount: Double? = null) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.OFFER_NEGOTIATE)) return
         val conv = currentActiveConversation() ?: return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         viewModelScope.launch {
-            chatRepo.respondToOffer(conv, uid, status, counterAmount)
-                .onSuccess { showToast(if (isArabic()) "تم تحديث حالة العرض" else "Offer updated", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Action failed", ToastType.ERROR) }
+            chatRepo?.respondToOffer(conv, uid, status, counterAmount)
+                ?.onSuccess { showToast(if (isArabic()) "تم تحديث حالة العرض" else "Offer updated", ToastType.SUCCESS) }
+                ?.onFailure { e -> showToast(e.localizedMessage ?: "Action failed", ToastType.ERROR) }
         }
     }
 
     fun openReviewModal(request: ReviewRequest) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         if (request.sellerId == uid) {
             showToast(if (isArabic()) "لا يمكنك تقييم حسابك الشخصي" else "You cannot review your own account", ToastType.WARNING)
             return
@@ -1163,9 +1335,10 @@ class HatchMainViewModel @Inject constructor(
         if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val req = uiState.value.reviewRequest ?: return
         val reviewer = uiState.value.currentUser ?: return
+        val repo = interactionRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            interactionRepo.submitReview(
+            repo.submitReview(
                 sellerId = req.sellerId,
                 reviewerId = reviewer.uid,
                 reviewerName = reviewer.name,
@@ -1195,9 +1368,10 @@ class HatchMainViewModel @Inject constructor(
         if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val req = uiState.value.reportRequest ?: return
         val reporter = uiState.value.currentUser ?: return
+        val repo = interactionRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            interactionRepo.submitReport(
+            repo.submitReport(
                 reporterId = reporter.uid,
                 reporterName = reporter.name,
                 reportedUserId = req.userId,
@@ -1224,13 +1398,13 @@ class HatchMainViewModel @Inject constructor(
     fun closeNotifications() { _localState.update { it.copy(showNotificationsModal = false) } }
 
     fun markAllNotificationsRead() {
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         if (uiState.value.isCurrentlySuspended) return
         val allIds = uiState.value.notifications.map { it.id }.toSet()
         _localState.update { it.copy(readBroadcastIds = it.readBroadcastIds + allIds) }
         viewModelScope.launch {
             uiState.value.notifications.filter { !it.read }.forEach { notif ->
-                interactionRepo.markPersonalNotificationRead(uid, notif.id)
+                interactionRepo?.markPersonalNotificationRead(uid, notif.id)
             }
         }
     }
@@ -1254,9 +1428,10 @@ class HatchMainViewModel @Inject constructor(
     fun submitVerificationRequest(note: String, documentUrl: String? = null) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.GENERAL)) return
         val user = uiState.value.currentUser ?: return
+        val repo = interactionRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            interactionRepo.submitVerificationRequest(user, note, documentUrl)
+            repo.submitVerificationRequest(user, note, documentUrl)
                 .onSuccess {
                     _localState.update { it.copy(showVerificationRequestDialog = false) }
                     showToast(
@@ -1305,11 +1480,11 @@ class HatchMainViewModel @Inject constructor(
 
     fun boostListingWithExistingCredit(productId: String) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
-        val uid = uiState.value.auth.firebaseUser?.uid ?: return
+        val uid = uiState.value.auth.uid ?: return
         viewModelScope.launch {
-            productRepo.featureProductWithCredit(productId, uid)
-                .onSuccess { showToast(if (isArabic()) "تم تمييز الإعلان في صدارة السوق ⭐" else "Listing boosted ⭐", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Boost failed", ToastType.ERROR) }
+            productRepo?.featureProductWithCredit(productId, uid)
+                ?.onSuccess { showToast(if (isArabic()) "تم تمييز الإعلان في صدارة السوق ⭐" else "Listing boosted ⭐", ToastType.SUCCESS) }
+                ?.onFailure { e -> showToast(e.localizedMessage ?: "Boost failed", ToastType.ERROR) }
         }
     }
 
@@ -1322,11 +1497,11 @@ class HatchMainViewModel @Inject constructor(
 
     fun recordAdImpression(adId: String) {
         if (!uiState.value.isSignedIn || uiState.value.isCurrentlySuspended) return
-        viewModelScope.launch { monetizationRepo.recordImpression(adId) }
+        viewModelScope.launch { monetizationRepo?.recordImpression(adId) }
     }
     fun recordAdClick(adId: String) {
         if (!uiState.value.isSignedIn || uiState.value.isCurrentlySuspended) return
-        viewModelScope.launch { monetizationRepo.recordClick(adId) }
+        viewModelScope.launch { monetizationRepo?.recordClick(adId) }
     }
 
     fun openAdminConversationAudit(conversation: Conversation) {
@@ -1342,9 +1517,10 @@ class HatchMainViewModel @Inject constructor(
 
     fun sendBroadcast(type: String, titleAr: String, titleEn: String, bodyAr: String, bodyEn: String, relatedProductId: String?) {
         if (!requireAdminOrDeny()) return
+        val repo = monetizationRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            monetizationRepo.sendBroadcastNotification(type, titleAr, titleEn, bodyAr, bodyEn, relatedProductId)
+            repo.sendBroadcastNotification(type, titleAr, titleEn, bodyAr, bodyEn, relatedProductId)
                 .onSuccess { showToast(if (isArabic()) "تم إرسال الإشعار الجماعي بنجاح 📣" else "Broadcast sent 📣", ToastType.SUCCESS) }
                 .onFailure { e -> handleAdminFailure(e, "Broadcast failed") }
             setSubmitting(false)
@@ -1354,50 +1530,50 @@ class HatchMainViewModel @Inject constructor(
     fun updateReportStatus(reportId: String, status: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.updateReportStatus(reportId, status)
-                .onSuccess { showToast(if (isArabic()) "تم تحديث حالة البلاغ" else "Report updated", ToastType.SUCCESS) }
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.updateReportStatus(reportId, status)
+                ?.onSuccess { showToast(if (isArabic()) "تم تحديث حالة البلاغ" else "Report updated", ToastType.SUCCESS) }
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
     fun approveFlaggedProduct(productId: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.approveFlaggedProduct(productId)
-                .onSuccess { showToast(if (isArabic()) "تمت إعادة تفعيل الإعلان" else "Listing restored", ToastType.SUCCESS) }
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.approveFlaggedProduct(productId)
+                ?.onSuccess { showToast(if (isArabic()) "تمت إعادة تفعيل الإعلان" else "Listing restored", ToastType.SUCCESS) }
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
     fun deleteProductAsAdmin(productId: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            productRepo.deleteProduct(productId)
-                .onSuccess { showToast(if (isArabic()) "تم حذف الإعلان" else "Listing deleted", ToastType.INFO) }
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            productRepo?.deleteProduct(productId)
+                ?.onSuccess { showToast(if (isArabic()) "تم حذف الإعلان" else "Listing deleted", ToastType.INFO) }
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
     fun suspendUser(uid: String, days: Int, reason: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.suspendUser(uid, days, reason)
-                .onSuccess {
+            monetizationRepo?.suspendUser(uid, days, reason)
+                ?.onSuccess {
                     showToast(
                         if (isArabic()) "تم إيقاف الحساب وتعليق إعلاناته النشطة وإخطار المستخدم" else "User suspended and active listings hidden",
                         ToastType.WARNING
                     )
                 }
-                .onFailure { e -> handleAdminFailure(e, "Suspend failed") }
+                ?.onFailure { e -> handleAdminFailure(e, "Suspend failed") }
         }
     }
 
     fun unsuspendUser(uid: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.unsuspendUser(uid)
-                .onSuccess { showToast(if (isArabic()) "تم فك الحظر عن الحساب" else "User unsuspended", ToastType.SUCCESS) }
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.unsuspendUser(uid)
+                ?.onSuccess { showToast(if (isArabic()) "تم فك الحظر عن الحساب" else "User unsuspended", ToastType.SUCCESS) }
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1460,9 +1636,9 @@ class HatchMainViewModel @Inject constructor(
     fun deleteUserAsAdmin(uid: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.deleteUserAsAdmin(uid)
-                .onSuccess { showToast(if (isArabic()) "تم حذف الحساب بالكامل" else "User removed", ToastType.INFO) }
-                .onFailure { e ->
+            monetizationRepo?.deleteUserAsAdmin(uid)
+                ?.onSuccess { showToast(if (isArabic()) "تم حذف الحساب بالكامل" else "User removed", ToastType.INFO) }
+                ?.onFailure { e ->
                     val localized = if (e is UnsupportedOperationException) {
                         if (isArabic()) {
                             "الحذف الكامل للحساب يتطلب Cloud Function (Admin SDK) لحذف Firebase Auth والبيانات دون ترك سجلات يتيمة؛ استخدم الإيقاف المؤقت حالياً."
@@ -1477,9 +1653,10 @@ class HatchMainViewModel @Inject constructor(
 
     fun createSponsoredAd(ad: SponsoredAdItem) {
         if (!requireAdminOrDeny()) return
+        val repo = monetizationRepo ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            monetizationRepo.createSponsoredAd(ad)
+            repo.createSponsoredAd(ad)
                 .onSuccess { showToast(if (isArabic()) "تم إطلاق الحملة الإعلانية" else "Ad launched", ToastType.SUCCESS) }
                 .onFailure { e -> handleAdminFailure(e, "Create ad failed") }
             setSubmitting(false)
@@ -1489,47 +1666,47 @@ class HatchMainViewModel @Inject constructor(
     fun toggleAdActive(adId: String, active: Boolean) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.toggleAdActive(adId, active)
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.toggleAdActive(adId, active)
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
     fun updateAdDuration(adId: String, seconds: Int) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.updateAdDuration(adId, seconds)
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.updateAdDuration(adId, seconds)
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
     fun deleteAd(adId: String) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.deleteAd(adId)
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.deleteAd(adId)
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
     fun updateAdConfig(config: AdMobConfig) {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.updateAdConfig(config)
-                .onSuccess { showToast(if (isArabic()) "تم حفظ إعدادات الإعلانات" else "Ad config saved", ToastType.SUCCESS) }
-                .onFailure { e -> handleAdminFailure(e, "Failed") }
+            monetizationRepo?.updateAdConfig(config)
+                ?.onSuccess { showToast(if (isArabic()) "تم حفظ إعدادات الإعلانات" else "Ad config saved", ToastType.SUCCESS) }
+                ?.onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
     fun resetAdStats() {
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
-            monetizationRepo.resetAllAdStats(uiState.value.sponsoredAds)
-                .onSuccess { showToast(if (isArabic()) "تم تصفير عدادات الإعلانات" else "Ad stats reset", ToastType.INFO) }
-                .onFailure { e -> handleAdminFailure(e, "Reset failed") }
+            monetizationRepo?.resetAllAdStats(uiState.value.sponsoredAds)
+                ?.onSuccess { showToast(if (isArabic()) "تم تصفير عدادات الإعلانات" else "Ad stats reset", ToastType.INFO) }
+                ?.onFailure { e -> handleAdminFailure(e, "Reset failed") }
         }
     }
 
     fun refreshCloudinaryQuota() {
         if (!uiState.value.isAdmin) return
         viewModelScope.launch {
-            monetizationRepo.fetchAdminQuotaStatus(uiState.value.isAdmin)
+            streams.fetchAdminQuotaStatus(uiState.value.isAdmin)
                 .onSuccess { status -> _localState.update { it.copy(cloudinaryQuota = status) } }
                 .onFailure { e ->
                     val msg = e.message.orEmpty()
