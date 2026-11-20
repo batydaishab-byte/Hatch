@@ -1,5 +1,6 @@
 package com.hatch.marketplace.data.repository
 
+import android.util.Log
 import com.google.firebase.firestore.FieldValue
 import com.hatch.marketplace.data.media.CloudinaryMediaService
 import com.hatch.marketplace.data.media.CloudinaryQuotaStatus
@@ -35,7 +36,12 @@ class MonetizationRepository @Inject constructor(
         } else {
             db.collection("sponsored_ads").whereEqualTo("isActive", true)
         }
-        val reg = query.addSnapshotListener { snap, _ ->
+        val reg = query.addSnapshotListener { snap, err ->
+            if (err != null) {
+                Log.w("HatchMonetization", "sponsored_ads listener error: code=${err.code}")
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
             val list = snap?.documents?.mapNotNull { doc ->
                 doc.toObject(SponsoredAdItem::class.java)?.copy(id = doc.id)
             }.orEmpty().sortedByDescending { it.createdAt?.seconds ?: 0L }
@@ -52,7 +58,11 @@ class MonetizationRepository @Inject constructor(
             return@callbackFlow
         }
         val reg = db.collection("ad_config").document("default")
-            .addSnapshotListener { snap, _ ->
+            .addSnapshotListener { snap, err ->
+                if (err != null) {
+                    Log.w("HatchMonetization", "ad_config listener error: code=${err.code}")
+                    return@addSnapshotListener
+                }
                 val cfg = snap?.toObject(AdMobConfig::class.java) ?: AdMobConfig()
                 trySend(cfg)
             }
@@ -223,12 +233,44 @@ class MonetizationRepository @Inject constructor(
 
     suspend fun suspendUser(uid: String, days: Int, reason: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
+        val adminUid = clients.auth?.currentUser?.uid ?: error("Authentication required")
+        require(uid.isNotBlank()) { "Target UID is required." }
+        require(uid != adminUid) { "Admins cannot suspend their own active session." }
+
         val safeDays = days.coerceIn(1, 3650)
         val nowMillis = System.currentTimeMillis()
         val untilIso = MarketplaceLogic.buildSuspensionEndIso(safeDays, nowMillis)
         val untilTs = MarketplaceLogic.buildSuspensionEndTimestamp(safeDays, nowMillis)
         val cleanReason = reason.trim().take(500)
-        db.collection("users_public").document(uid).update(
+
+        val publicRef = db.collection("users_public").document(uid)
+        val publicSnap = publicRef.get().await()
+        require(publicSnap.exists()) { "User public profile not found." }
+
+        val commercialRef = db.collection("commercial_profiles").document(uid)
+        val commercialSnap = commercialRef.get().await()
+
+        val activeProductDocs = db.collection("products")
+            .whereEqualTo("sellerId", uid)
+            .whereEqualTo("status", ProductStatus.ACTIVE.wireValue)
+            .get()
+            .await()
+            .documents
+
+        // Firestore WriteBatch allows max 500 operations total. Never split across non-atomic
+        // batches or exceed the 500-op ceiling; bulk sellers (>450 active listings) require
+        // a server-side Cloud Function using Firebase Admin SDK / BulkWriter.
+        check(MarketplaceLogic.canSuspendProductsAtomically(activeProductDocs.size)) {
+            "User has ${activeProductDocs.size} active listings, which exceeds the atomic 500-operation Firestore batch limit. Bulk suspension requires a Cloud Function (Admin SDK)."
+        }
+
+        val notifId = HatchFormatters.sanitizeFirestoreId("susp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+        val notifRef = db.collection("users_private").document(uid)
+            .collection("notifications").document(notifId)
+
+        val batch = db.batch()
+        batch.update(
+            publicRef,
             mapOf(
                 "status" to UserStatus.SUSPENDED.wireValue,
                 "suspensionDays" to safeDays,
@@ -238,41 +280,61 @@ class MonetizationRepository @Inject constructor(
                 "verifiedIdentity" to false,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
-        ).await()
-
-        runCatching {
-            val commercialRef = db.collection("commercial_profiles").document(uid)
-            if (commercialRef.get().await().exists()) {
-                commercialRef.update(
-                    mapOf(
-                        "status" to UserStatus.SUSPENDED.wireValue,
-                        "verifiedIdentity" to false,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
-        }
-
-        val notifId = HatchFormatters.sanitizeFirestoreId("susp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
-        db.collection("users_private").document(uid)
-            .collection("notifications").document(notifId)
-            .set(
-                hashMapOf<String, Any>(
-                    "id" to notifId,
-                    "type" to "alert",
-                    "titleAr" to "تم إيقاف حسابك مؤقتاً لمدة $safeDays يوم",
-                    "titleEn" to "Account suspended for $safeDays days",
-                    "bodyAr" to "السبب: $cleanReason",
-                    "bodyEn" to "Reason: $cleanReason",
-                    "read" to false,
-                    "createdAt" to FieldValue.serverTimestamp()
+        )
+        if (commercialSnap.exists()) {
+            batch.update(
+                commercialRef,
+                mapOf(
+                    "status" to UserStatus.SUSPENDED.wireValue,
+                    "verifiedIdentity" to false,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            ).await()
+            )
+        }
+        // Hide all active listings from buyers/guests (`flagged` is excluded from buyer/guest list queries
+        // and regular users cannot re-activate non-active listings per firestore.rules).
+        activeProductDocs.forEach { prodDoc ->
+            batch.update(
+                prodDoc.reference,
+                mapOf(
+                    "status" to ProductStatus.FLAGGED.wireValue,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        batch.set(
+            notifRef,
+            hashMapOf<String, Any>(
+                "id" to notifId,
+                "type" to "alert",
+                "titleAr" to "تم إيقاف حسابك مؤقتاً لمدة $safeDays يوم",
+                "titleEn" to "Account suspended for $safeDays days",
+                "bodyAr" to "السبب: $cleanReason",
+                "bodyEn" to "Reason: $cleanReason",
+                "read" to false,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        )
+        batch.commit().await()
     }
 
     suspend fun unsuspendUser(uid: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
-        db.collection("users_public").document(uid).update(
+        clients.auth?.currentUser ?: error("Authentication required")
+        val publicRef = db.collection("users_public").document(uid)
+        val publicSnap = publicRef.get().await()
+        require(publicSnap.exists()) { "User public profile not found." }
+
+        val commercialRef = db.collection("commercial_profiles").document(uid)
+        val commercialSnap = commercialRef.get().await()
+
+        val notifId = HatchFormatters.sanitizeFirestoreId("unsusp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
+        val notifRef = db.collection("users_private").document(uid)
+            .collection("notifications").document(notifId)
+
+        val batch = db.batch()
+        batch.update(
+            publicRef,
             mapOf(
                 "status" to UserStatus.ACTIVE.wireValue,
                 "suspensionDays" to FieldValue.delete(),
@@ -281,43 +343,48 @@ class MonetizationRepository @Inject constructor(
                 "suspensionReason" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
-        ).await()
-        runCatching {
-            val commercialRef = db.collection("commercial_profiles").document(uid)
-            if (commercialRef.get().await().exists()) {
-                commercialRef.update(
-                    mapOf(
-                        "status" to UserStatus.ACTIVE.wireValue,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
+        )
+        if (commercialSnap.exists()) {
+            batch.update(
+                commercialRef,
+                mapOf(
+                    "status" to UserStatus.ACTIVE.wireValue,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
         }
-        runCatching {
-            val notifId = HatchFormatters.sanitizeFirestoreId("unsusp_${UUID.randomUUID().toString().replace("-", "").take(12)}")
-            db.collection("users_private").document(uid)
-                .collection("notifications").document(notifId)
-                .set(
-                    hashMapOf<String, Any>(
-                        "id" to notifId,
-                        "type" to "system",
-                        "titleAr" to "تم رفع الإيقاف عن حسابك ✅",
-                        "titleEn" to "Your account suspension has been lifted ✅",
-                        "bodyAr" to "يمكنك الآن استئناف النشر والتفاوض على سوق هتش مع الالتزام بقوانين الاستخدام.",
-                        "bodyEn" to "You can now resume listing and negotiating on HATCH Marketplace.",
-                        "read" to false,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-        }
+        batch.set(
+            notifRef,
+            hashMapOf<String, Any>(
+                "id" to notifId,
+                "type" to "system",
+                "titleAr" to "تم رفع الإيقاف عن حسابك ✅",
+                "titleEn" to "Your account suspension has been lifted ✅",
+                "bodyAr" to "يمكنك الآن استئناف النشر والتفاوض على سوق هتش مع الالتزام بقوانين الاستخدام.",
+                "bodyEn" to "You can now resume listing and negotiating on HATCH Marketplace.",
+                "read" to false,
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+        )
+        batch.commit().await()
     }
 
-    suspend fun deleteUserAsAdmin(uid: String): Result<Unit> = runCatching {
-        val db = clients.firestore ?: error("Firestore unavailable")
-        db.collection("users_public").document(uid).delete().await()
-        runCatching { db.collection("users_private").document(uid).delete().await() }
-        runCatching { db.collection("commercial_profiles").document(uid).delete().await() }
-    }
+    /**
+     * Full administrative user deletion CANNOT be performed safely from the Android client:
+     * 1. Client SDKs cannot delete another user's Firebase Authentication record (`admin.auth().deleteUser`),
+     *    so the user could immediately sign back in.
+     * 2. Deleting `users_private/{uid}` or `conversations/{id}` leaves orphaned subcollections
+     *    (`swipes`, `favorites`, `messages`), and `swipes`/`favorites`/`credit_transactions`
+     *    cannot be deleted by an admin under `firestore.rules`.
+     * 3. Cloudinary media cleanup requires server-side `CLOUDINARY_API_SECRET`.
+     * Fail-closed until a Cloud Function (Firebase Admin SDK) handles complete cascade deletion.
+     */
+    suspend fun deleteUserAsAdmin(@Suppress("UNUSED_PARAMETER") uid: String): Result<Unit> =
+        Result.failure(
+            UnsupportedOperationException(
+                "Full account deletion requires a Cloud Function (Firebase Admin SDK) to delete Firebase Auth, listings, conversations, subcollections, and Cloudinary assets without leaving orphaned data."
+            )
+        )
 
     suspend fun updateReportStatus(reportId: String, newStatus: String): Result<Unit> = runCatching {
         val db = clients.firestore ?: error("Firestore unavailable")
@@ -339,8 +406,7 @@ class MonetizationRepository @Inject constructor(
         ).await()
     }
 
-    suspend fun fetchAdminQuotaStatus(isAdmin: Boolean): CloudinaryQuotaStatus {
+    suspend fun fetchAdminQuotaStatus(isAdmin: Boolean): Result<CloudinaryQuotaStatus> {
         return cloudinaryService.fetchAdminQuotaStatus(isAdmin)
-            .getOrDefault(CloudinaryQuotaStatus())
     }
 }

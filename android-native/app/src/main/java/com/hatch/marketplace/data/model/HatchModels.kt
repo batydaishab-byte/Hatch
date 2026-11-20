@@ -568,8 +568,21 @@ object HatchFormatters {
 }
 
 object MarketplaceLogic {
-    fun isAdminRole(hasAdminClaim: Boolean, hasAdminDoc: Boolean = false): Boolean =
-        hasAdminClaim || hasAdminDoc
+    const val MAX_ATOMIC_SUSPEND_PRODUCTS = 450
+
+    /**
+     * Admin UI & query access MUST align with Firestore `allow list` rules (`isAdminClaim()`),
+     * which require a verified email and Firebase Auth Custom Claim `admin == true`.
+     * Having `/admins/{uid}` (`hasAdminDoc`) without the custom claim cannot execute admin
+     * collection queries or media-signer admin APIs, so it must not unlock the Admin UI.
+     */
+    fun isAdminRole(
+        hasAdminClaim: Boolean,
+        @Suppress("UNUSED_PARAMETER") hasAdminDoc: Boolean = false
+    ): Boolean = hasAdminClaim
+
+    fun canSuspendProductsAtomically(activeProductsCount: Int): Boolean =
+        activeProductsCount in 0..MAX_ATOMIC_SUSPEND_PRODUCTS
 
     fun isUserSuspended(
         status: String,

@@ -125,7 +125,7 @@ class CloudinaryMediaService @Inject constructor(
                         videoUploadsEnabled = MediaUploadPolicy.isVideoUploadSecurelyEnabled(isAdmin)
                     )
                 }
-                val idToken = requireFirebaseIdToken()
+                val idToken = requireFirebaseIdToken(forceRefresh = true)
                 val conn = (URL("${BuildConfig.MEDIA_SIGNER_URL.trimEnd('/')}/admin/media-usage")
                     .openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -136,6 +136,10 @@ class CloudinaryMediaService @Inject constructor(
                 val code = conn.responseCode
                 val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                     ?.bufferedReader()?.readText().orEmpty()
+                if (code == 401 || code == 403) {
+                    // Sync FirebaseAuth IdTokenListener if admin claim was revoked server-side.
+                    runCatching { requireFirebaseIdToken(forceRefresh = true) }
+                }
                 require(code in 200..299) { "Quota check failed ($code): $body" }
                 json.decodeFromString<CloudinaryQuotaStatus>(body)
             }
@@ -150,26 +154,41 @@ class CloudinaryMediaService @Inject constructor(
         require(signerBase.startsWith("https://")) {
             "Signed upload service (MEDIA_SIGNER_URL) is not configured yet."
         }
-        val idToken = requireFirebaseIdToken()
+        val requiresAdminClaim = action == MediaUploadPolicy.UploadAction.SPONSORED_AD_IMAGE ||
+            action == MediaUploadPolicy.UploadAction.SPONSORED_AD_VIDEO
+
         val payload = JSONObject().apply {
             put("action", action.name)
             put("byteSize", byteSize)
             put("durationMs", durationMs)
         }.toString()
 
-        val conn = (URL("$signerBase/sign-upload").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $idToken")
-            setRequestProperty("Content-Type", "application/json")
-            connectTimeout = 12_000
-            readTimeout = 12_000
+        suspend fun executeRequest(forceRefresh: Boolean): Pair<Int, String> {
+            val idToken = requireFirebaseIdToken(forceRefresh = forceRefresh)
+            val conn = (URL("$signerBase/sign-upload").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer $idToken")
+                setRequestProperty("Content-Type", "application/json")
+                connectTimeout = 12_000
+                readTimeout = 12_000
+            }
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                ?.bufferedReader()?.readText().orEmpty()
+            return code to body
         }
-        conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
 
-        val code = conn.responseCode
-        val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.readText().orEmpty()
+        var (code, body) = executeRequest(forceRefresh = requiresAdminClaim)
+        if (code == 401 && !requiresAdminClaim) {
+            // Retry once with a freshly minted ID token in case cached JWT just expired.
+            val retry = executeRequest(forceRefresh = true)
+            code = retry.first
+            body = retry.second
+        } else if (code == 403 && requiresAdminClaim) {
+            runCatching { requireFirebaseIdToken(forceRefresh = true) }
+        }
         require(code in 200..299) { "Upload authorization denied ($code): $body" }
         json.decodeFromString<SignedUploadTicket>(body)
     }
@@ -216,9 +235,9 @@ class CloudinaryMediaService @Inject constructor(
         JSONObject(body).getString("secure_url")
     }
 
-    private suspend fun requireFirebaseIdToken(): String {
+    private suspend fun requireFirebaseIdToken(forceRefresh: Boolean = false): String {
         val user = firebaseClients.auth?.currentUser
             ?: error("User must be signed in to upload media.")
-        return user.getIdToken(false).await()?.token ?: error("Missing Firebase ID token.")
+        return user.getIdToken(forceRefresh).await()?.token ?: error("Missing Firebase ID token.")
     }
 }

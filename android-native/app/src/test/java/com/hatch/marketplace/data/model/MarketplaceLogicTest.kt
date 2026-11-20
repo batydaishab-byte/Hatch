@@ -73,11 +73,20 @@ class MarketplaceLogicTest {
     }
 
     @Test
-    fun adminRoleRequiresServerVerifiedClaimOrAdminDocOnly() {
+    fun adminRoleRequiresServerVerifiedClaimAndIgnoresDocOnly() {
         assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = true, hasAdminDoc = false))
-        assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = false, hasAdminDoc = true))
+        assertFalse(MarketplaceLogic.isAdminRole(hasAdminClaim = false, hasAdminDoc = true))
         assertTrue(MarketplaceLogic.isAdminRole(hasAdminClaim = true, hasAdminDoc = true))
         assertFalse(MarketplaceLogic.isAdminRole(hasAdminClaim = false, hasAdminDoc = false))
+    }
+
+    @Test
+    fun suspendUserBatchGuardRejectsCountsExceedingAtomicLimit() {
+        assertTrue(MarketplaceLogic.canSuspendProductsAtomically(0))
+        assertTrue(MarketplaceLogic.canSuspendProductsAtomically(MarketplaceLogic.MAX_ATOMIC_SUSPEND_PRODUCTS))
+        assertFalse(MarketplaceLogic.canSuspendProductsAtomically(MarketplaceLogic.MAX_ATOMIC_SUSPEND_PRODUCTS + 1))
+        assertFalse(MarketplaceLogic.canSuspendProductsAtomically(500))
+        assertFalse(MarketplaceLogic.canSuspendProductsAtomically(-1))
     }
 
     @Test

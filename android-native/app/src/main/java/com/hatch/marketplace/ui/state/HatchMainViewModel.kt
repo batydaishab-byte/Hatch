@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.auth.AuthCredential
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.hatch.marketplace.data.local.HatchPreferences
 import com.hatch.marketplace.data.media.CloudinaryQuotaStatus
 import com.hatch.marketplace.data.model.AccountType
@@ -445,6 +446,31 @@ class HatchMainViewModel @Inject constructor(
                     }
                 }
         }
+        viewModelScope.launch {
+            authSessionFlow
+                .distinctUntilChangedBy { it.firebaseUser?.uid to it.isAdmin }
+                .collectLatest { session ->
+                    if (!session.isAdmin) {
+                        val currentLocal = _localState.value
+                        val wasInAdminUi = currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null
+                        if (wasInAdminUi) {
+                            if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
+                                _activeConversationId.value = currentLocal.activeConversationId
+                            }
+                            _localState.update { state ->
+                                state.copy(
+                                    activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
+                                    adminAuditConversation = null
+                                )
+                            }
+                            showToast(
+                                if (isArabic()) "تم تحديث الجلسة: لا توجد صلاحية إدارة نشطة" else "Session updated: admin access is not active",
+                                ToastType.WARNING
+                            )
+                        }
+                    }
+                }
+        }
     }
 
     fun requestGuestPrompt(reason: GuestPromptReason) {
@@ -466,7 +492,12 @@ class HatchMainViewModel @Inject constructor(
         }
         _localState.update { it.copy(activeTab = tab) }
         if (tab == MainTab.ADMIN) {
-            refreshCloudinaryQuota()
+            viewModelScope.launch {
+                val hasClaim = authRepo.refreshIdTokenClaims(forceRefresh = true).getOrDefault(uiState.value.auth.hasAdminClaim)
+                if (hasClaim) {
+                    refreshCloudinaryQuota()
+                }
+            }
         }
     }
 
@@ -517,6 +548,9 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             _localState.update { it.copy(isRefreshing = true) }
             authRepo.verifyFirestoreServerConnection()
+            if (uiState.value.isSignedIn) {
+                authRepo.refreshIdTokenClaims(forceRefresh = true)
+            }
             if (uiState.value.isAdmin) refreshCloudinaryQuota()
             delay(500)
             _localState.update { it.copy(isRefreshing = false) }
@@ -1312,7 +1346,7 @@ class HatchMainViewModel @Inject constructor(
             setSubmitting(true)
             monetizationRepo.sendBroadcastNotification(type, titleAr, titleEn, bodyAr, bodyEn, relatedProductId)
                 .onSuccess { showToast(if (isArabic()) "تم إرسال الإشعار الجماعي بنجاح 📣" else "Broadcast sent 📣", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Broadcast failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Broadcast failed") }
             setSubmitting(false)
         }
     }
@@ -1322,7 +1356,7 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             monetizationRepo.updateReportStatus(reportId, status)
                 .onSuccess { showToast(if (isArabic()) "تم تحديث حالة البلاغ" else "Report updated", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1331,7 +1365,7 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             monetizationRepo.approveFlaggedProduct(productId)
                 .onSuccess { showToast(if (isArabic()) "تمت إعادة تفعيل الإعلان" else "Listing restored", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1340,7 +1374,7 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             productRepo.deleteProduct(productId)
                 .onSuccess { showToast(if (isArabic()) "تم حذف الإعلان" else "Listing deleted", ToastType.INFO) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1348,8 +1382,13 @@ class HatchMainViewModel @Inject constructor(
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.suspendUser(uid, days, reason)
-                .onSuccess { showToast(if (isArabic()) "تم إيقاف الحساب وإخطار المستخدم" else "User suspended", ToastType.WARNING) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Suspend failed", ToastType.ERROR) }
+                .onSuccess {
+                    showToast(
+                        if (isArabic()) "تم إيقاف الحساب وتعليق إعلاناته النشطة وإخطار المستخدم" else "User suspended and active listings hidden",
+                        ToastType.WARNING
+                    )
+                }
+                .onFailure { e -> handleAdminFailure(e, "Suspend failed") }
         }
     }
 
@@ -1358,7 +1397,7 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             monetizationRepo.unsuspendUser(uid)
                 .onSuccess { showToast(if (isArabic()) "تم فك الحظر عن الحساب" else "User unsuspended", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1368,7 +1407,7 @@ class HatchMainViewModel @Inject constructor(
             setSubmitting(true)
             authRepo.approveVerificationRequest(request)
                 .onSuccess { showToast(if (isArabic()) "تم اعتماد التوثيق الذهبي بنجاح ⭐" else "Gold badge approved ⭐", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
             setSubmitting(false)
         }
     }
@@ -1379,7 +1418,7 @@ class HatchMainViewModel @Inject constructor(
             setSubmitting(true)
             authRepo.rejectVerificationRequest(request, reason)
                 .onSuccess { showToast(if (isArabic()) "تم رفض طلب التوثيق وإشعار المستخدم" else "Verification rejected", ToastType.INFO) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
             setSubmitting(false)
         }
     }
@@ -1398,7 +1437,7 @@ class HatchMainViewModel @Inject constructor(
                         ToastType.SUCCESS
                     )
                 }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1413,7 +1452,7 @@ class HatchMainViewModel @Inject constructor(
                         ToastType.SUCCESS
                     )
                 }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Credit grant failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Credit grant failed") }
             setSubmitting(false)
         }
     }
@@ -1422,8 +1461,17 @@ class HatchMainViewModel @Inject constructor(
         if (!requireAdminOrDeny()) return
         viewModelScope.launch {
             monetizationRepo.deleteUserAsAdmin(uid)
-                .onSuccess { showToast(if (isArabic()) "تم حذف بيانات الحساب" else "User removed", ToastType.INFO) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onSuccess { showToast(if (isArabic()) "تم حذف الحساب بالكامل" else "User removed", ToastType.INFO) }
+                .onFailure { e ->
+                    val localized = if (e is UnsupportedOperationException) {
+                        if (isArabic()) {
+                            "الحذف الكامل للحساب يتطلب Cloud Function (Admin SDK) لحذف Firebase Auth والبيانات دون ترك سجلات يتيمة؛ استخدم الإيقاف المؤقت حالياً."
+                        } else {
+                            e.localizedMessage ?: "Account deletion requires Cloud Functions (Admin SDK)."
+                        }
+                    } else null
+                    handleAdminFailure(e, localized ?: "Failed", overrideMessage = localized)
+                }
         }
     }
 
@@ -1433,22 +1481,31 @@ class HatchMainViewModel @Inject constructor(
             setSubmitting(true)
             monetizationRepo.createSponsoredAd(ad)
                 .onSuccess { showToast(if (isArabic()) "تم إطلاق الحملة الإعلانية" else "Ad launched", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Create ad failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Create ad failed") }
             setSubmitting(false)
         }
     }
 
     fun toggleAdActive(adId: String, active: Boolean) {
         if (!requireAdminOrDeny()) return
-        viewModelScope.launch { monetizationRepo.toggleAdActive(adId, active) }
+        viewModelScope.launch {
+            monetizationRepo.toggleAdActive(adId, active)
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
+        }
     }
     fun updateAdDuration(adId: String, seconds: Int) {
         if (!requireAdminOrDeny()) return
-        viewModelScope.launch { monetizationRepo.updateAdDuration(adId, seconds) }
+        viewModelScope.launch {
+            monetizationRepo.updateAdDuration(adId, seconds)
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
+        }
     }
     fun deleteAd(adId: String) {
         if (!requireAdminOrDeny()) return
-        viewModelScope.launch { monetizationRepo.deleteAd(adId) }
+        viewModelScope.launch {
+            monetizationRepo.deleteAd(adId)
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
+        }
     }
 
     fun updateAdConfig(config: AdMobConfig) {
@@ -1456,7 +1513,7 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             monetizationRepo.updateAdConfig(config)
                 .onSuccess { showToast(if (isArabic()) "تم حفظ إعدادات الإعلانات" else "Ad config saved", ToastType.SUCCESS) }
-                .onFailure { e -> showToast(e.localizedMessage ?: "Failed", ToastType.ERROR) }
+                .onFailure { e -> handleAdminFailure(e, "Failed") }
         }
     }
 
@@ -1465,15 +1522,39 @@ class HatchMainViewModel @Inject constructor(
         viewModelScope.launch {
             monetizationRepo.resetAllAdStats(uiState.value.sponsoredAds)
                 .onSuccess { showToast(if (isArabic()) "تم تصفير عدادات الإعلانات" else "Ad stats reset", ToastType.INFO) }
+                .onFailure { e -> handleAdminFailure(e, "Reset failed") }
         }
     }
 
     fun refreshCloudinaryQuota() {
         if (!uiState.value.isAdmin) return
         viewModelScope.launch {
-            val status = monetizationRepo.fetchAdminQuotaStatus(uiState.value.isAdmin)
-            _localState.update { it.copy(cloudinaryQuota = status) }
+            monetizationRepo.fetchAdminQuotaStatus(uiState.value.isAdmin)
+                .onSuccess { status -> _localState.update { it.copy(cloudinaryQuota = status) } }
+                .onFailure { e ->
+                    val msg = e.message.orEmpty()
+                    if (msg.contains("401") || msg.contains("403") || msg.contains("Forbidden", ignoreCase = true)) {
+                        authRepo.refreshIdTokenClaims(forceRefresh = true)
+                    }
+                }
         }
+    }
+
+    private fun handleAdminFailure(
+        error: Throwable,
+        fallback: String,
+        overrideMessage: String? = null
+    ) {
+        val isPermissionError = (error as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ||
+            error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ||
+            error.message?.contains("403") == true ||
+            error.message?.contains("Forbidden", ignoreCase = true) == true
+        if (isPermissionError) {
+            viewModelScope.launch {
+                authRepo.refreshIdTokenClaims(forceRefresh = true)
+            }
+        }
+        showToast(overrideMessage ?: error.localizedMessage ?: fallback, ToastType.ERROR)
     }
 
     private fun requireAdminOrDeny(): Boolean {

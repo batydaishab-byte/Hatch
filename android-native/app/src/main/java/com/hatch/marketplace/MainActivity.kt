@@ -748,21 +748,23 @@ fun HatchMarketplaceRoot(
             )
         }
 
-        state.adminAuditConversation?.let { conv ->
-            AdminConversationModal(
-                conversation = conv,
-                messages = state.activeMessages,
-                language = state.language,
-                onDismiss = { viewModel.closeAdminConversationAudit() },
-                onDeleteAd = { viewModel.deleteProductAsAdmin(it) },
-                onSuspendSeller = { sellerId, sellerName ->
-                    viewModel.suspendUser(
-                        sellerId,
-                        7,
-                        if (state.language == AppLanguage.AR) "طلب عربون مخالف عبر المحادثة ($sellerName)" else "Upfront deposit scam warning ($sellerName)"
-                    )
-                }
-            )
+        if (state.isAdmin) {
+            state.adminAuditConversation?.let { conv ->
+                AdminConversationModal(
+                    conversation = conv,
+                    messages = state.activeMessages,
+                    language = state.language,
+                    onDismiss = { viewModel.closeAdminConversationAudit() },
+                    onDeleteAd = { viewModel.deleteProductAsAdmin(it) },
+                    onSuspendSeller = { sellerId, sellerName ->
+                        viewModel.suspendUser(
+                            sellerId,
+                            7,
+                            if (state.language == AppLanguage.AR) "طلب عربون مخالف عبر المحادثة ($sellerName)" else "Upfront deposit scam warning ($sellerName)"
+                        )
+                    }
+                )
+            }
         }
 
         state.guestPromptReason?.let { reason ->

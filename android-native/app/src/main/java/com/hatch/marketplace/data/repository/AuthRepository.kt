@@ -19,7 +19,10 @@ import com.hatch.marketplace.data.model.resolvedAccountType
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 import javax.inject.Inject
@@ -46,6 +49,7 @@ class AuthRepository @Inject constructor(
     private val clients: FirebaseClientsHolder
 ) {
     val isConfigured: Boolean get() = clients.isConfigured
+    private val forcedClaimEvents = MutableSharedFlow<Pair<String, Boolean>>(extraBufferCapacity = 8)
 
     fun currentFirebaseUser(): FirebaseUser? = clients.auth?.currentUser
 
@@ -68,6 +72,8 @@ class AuthRepository @Inject constructor(
         var hasAdminClaim = false
         var hasAdminDoc = false
         var publicLoaded = false
+        var lastObservedUid: String? = null
+        var lastForceRefreshedUid: String? = null
 
         fun emitState(user: FirebaseUser?) {
             if (user == null) {
@@ -97,7 +103,51 @@ class AuthRepository @Inject constructor(
             )
         }
 
+        fun syncClaimsFromToken(user: FirebaseUser, forceRefresh: Boolean) {
+            user.getIdToken(forceRefresh).addOnSuccessListener { tokenResult ->
+                if (auth.currentUser?.uid == user.uid) {
+                    val claim = user.isEmailVerified && (tokenResult.claims["admin"] == true)
+                    if (hasAdminClaim != claim || !forceRefresh) {
+                        hasAdminClaim = claim
+                        emitState(user)
+                    }
+                }
+            }.addOnFailureListener { e ->
+                Log.w("HatchAuthFlow", "getIdToken(forceRefresh=$forceRefresh) failed: ${e.javaClass.simpleName}")
+                if (forceRefresh && auth.currentUser?.uid == user.uid) {
+                    // Fallback cleanly to cached token when offline
+                    user.getIdToken(false).addOnSuccessListener { cached ->
+                        if (auth.currentUser?.uid == user.uid) {
+                            hasAdminClaim = user.isEmailVerified && (cached.claims["admin"] == true)
+                            emitState(user)
+                        }
+                    }
+                }
+            }
+        }
+
+        val forcedJob = launch {
+            forcedClaimEvents.collectLatest { (uid, claim) ->
+                val activeUser = auth.currentUser
+                if (activeUser != null && activeUser.uid == uid) {
+                    hasAdminClaim = activeUser.isEmailVerified && claim
+                    emitState(activeUser)
+                }
+            }
+        }
+
+        val idTokenListener = FirebaseAuth.IdTokenListener { firebaseAuth ->
+            val user = firebaseAuth.currentUser ?: return@IdTokenListener
+            syncClaimsFromToken(user, forceRefresh = false)
+        }
+
         val authListener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+            val user = firebaseAuth.currentUser
+            if (user?.uid == lastObservedUid && user != null) {
+                emitState(user)
+                return@AuthStateListener
+            }
+            lastObservedUid = user?.uid
             publicReg?.remove(); publicReg = null
             privateReg?.remove(); privateReg = null
             adminReg?.remove(); adminReg = null
@@ -107,25 +157,24 @@ class AuthRepository @Inject constructor(
             hasAdminDoc = false
             publicLoaded = false
 
-            val user = firebaseAuth.currentUser
             Log.d(
                 "HatchAuthFlow",
                 "AuthStateListener fired: signedIn=${user != null}, isAnonymous=${user?.isAnonymous == true}, hasFirestore=${db != null}"
             )
             if (user == null) {
+                lastForceRefreshedUid = null
                 emitState(null)
                 return@AuthStateListener
             }
 
             emitState(user)
 
-            user.getIdToken(false).addOnSuccessListener { tokenResult ->
-                if (firebaseAuth.currentUser?.uid == user.uid) {
-                    hasAdminClaim = user.isEmailVerified && (tokenResult.claims["admin"] == true)
-                    emitState(user)
-                }
-            }.addOnFailureListener { e ->
-                Log.w("HatchAuthFlow", "getIdToken failed: ${e.javaClass.simpleName}")
+            // Read cached claims immediately, then force one server refresh per session start
+            // so newly granted or recently revoked admin claims are detected without waiting ~1h.
+            syncClaimsFromToken(user, forceRefresh = false)
+            if (lastForceRefreshedUid != user.uid) {
+                lastForceRefreshedUid = user.uid
+                syncClaimsFromToken(user, forceRefresh = true)
             }
 
             if (db == null) {
@@ -168,18 +217,45 @@ class AuthRepository @Inject constructor(
                         Log.w("HatchAuthFlow", "admins listener error: code=${err.code}")
                         return@addSnapshotListener
                     }
-                    hasAdminDoc = snap != null && snap.exists()
+                    val docExists = snap != null && snap.exists()
+                    val docChanged = hasAdminDoc != docExists
+                    hasAdminDoc = docExists
+                    if (docChanged && docExists && !hasAdminClaim) {
+                        // Admin doc appeared without claim yet; refresh token in case claim was just minted.
+                        syncClaimsFromToken(user, forceRefresh = true)
+                    }
                     emitState(user)
                 }
         }
 
         auth.addAuthStateListener(authListener)
+        auth.addIdTokenListener(idTokenListener)
         awaitClose {
+            forcedJob.cancel()
             auth.removeAuthStateListener(authListener)
+            auth.removeIdTokenListener(idTokenListener)
             publicReg?.remove()
             privateReg?.remove()
             adminReg?.remove()
         }
+    }
+
+    /**
+     * Forces Firebase Auth to fetch a fresh ID token with updated custom claims for the current user.
+     * Note: Refreshing the token on this client updates local claims (grant or revocation), while
+     * previously minted tokens on other devices remain valid until their normal JWT expiry unless
+     * refresh tokens are revoked via Firebase Admin SDK.
+     */
+    suspend fun refreshIdTokenClaims(forceRefresh: Boolean = true): Result<Boolean> = runCatching {
+        val auth = clients.auth ?: error("Firebase Auth unavailable")
+        val user = auth.currentUser ?: return@runCatching false
+        if (forceRefresh) {
+            runCatching { user.reload().await() }
+        }
+        val tokenResult = user.getIdToken(forceRefresh).await()
+        val claim = user.isEmailVerified && (tokenResult?.claims?.get("admin") == true)
+        forcedClaimEvents.tryEmit(user.uid to claim)
+        claim
     }
 
     suspend fun verifyFirestoreServerConnection(): Result<Boolean> = runCatching {
@@ -763,7 +839,12 @@ class AuthRepository @Inject constructor(
             db.collection("users_public").whereEqualTo("status", UserStatus.ACTIVE.wireValue)
         }
 
-        val reg = query.addSnapshotListener { snap, _ ->
+        val reg = query.addSnapshotListener { snap, err ->
+            if (err != null) {
+                Log.w("HatchAuthFlow", "users_public list listener error: code=${err.code}")
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
             val list = snap?.documents?.mapNotNull { doc ->
                 doc.toObject(PublicUser::class.java)?.copy(uid = doc.id)
             }.orEmpty()

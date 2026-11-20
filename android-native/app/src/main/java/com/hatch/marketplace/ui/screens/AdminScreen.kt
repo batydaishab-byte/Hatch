@@ -499,13 +499,23 @@ fun AdminScreen(
         )
     }
 
-    // Delete User Confirm Dialog
+    // Delete User Confirm Dialog (Fail-closed until Cloud Function / Admin SDK cascade is deployed)
     deleteUserConfirm?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteUserConfirm = null },
             containerColor = HatchSurfaceDark,
-            title = { Text(if (isAr) "حذف حساب مستخدم" else "Delete User", color = HatchRose500, fontWeight = FontWeight.Black) },
-            text = { Text(if (isAr) "هل تريد حذف بيانات ${target.name} من هتش؟" else "Remove ${target.name}'s profile from HATCH?", color = HatchTextSecondary) },
+            title = { Text(if (isAr) "حذف الحساب يتطلب خادم Cloud Function" else "Cloud Function Required for Account Deletion", color = HatchRose500, fontWeight = FontWeight.Black, fontSize = 15.sp) },
+            text = {
+                Text(
+                    text = if (isAr) {
+                        "تم إيقاف الحذف الجزئي من العميل لحساب ${target.name} منعاً لترك إعلانات ومحادثات يتيمة وبقاء حساب Firebase Auth نشطاً. يتطلب الحذف الكامل دالة Cloud Function بصلاحية Admin SDK. استخدم الإيقاف المؤقت لتعطيل الحساب وإخفاء إعلاناته فوراً."
+                    } else {
+                        "Client-side partial deletion for ${target.name} is disabled so Firebase Auth, listings, and subcollections are never left orphaned. Full removal requires a Cloud Function (Admin SDK). Use temporary suspension to lock the account and hide its listings immediately."
+                    },
+                    color = HatchTextSecondary,
+                    fontSize = 12.sp
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
@@ -513,7 +523,7 @@ fun AdminScreen(
                         deleteUserConfirm = null
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = HatchRed500, contentColor = Color.White)
-                ) { Text(if (isAr) "حذف" else "Delete", fontWeight = FontWeight.Black) }
+                ) { Text(if (isAr) "فحص المتطلبات" else "Verify", fontWeight = FontWeight.Black) }
             },
             dismissButton = {
                 TextButton(onClick = { deleteUserConfirm = null }) { Text(if (isAr) "إلغاء" else "Cancel", color = HatchTextMuted) }
