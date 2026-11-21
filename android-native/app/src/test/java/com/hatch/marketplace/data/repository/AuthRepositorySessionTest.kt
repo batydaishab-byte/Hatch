@@ -45,6 +45,7 @@ class AuthRepositorySessionTest {
                 repo.observeAuthSession().collect { bucket.add(it) }
             }
         }
+        runCurrent()
         advanceUntilIdle()
 
         assertEquals(1, gateway.authListenerRegistrations)
@@ -62,6 +63,7 @@ class AuthRepositorySessionTest {
             privateUser = PrivateUser(uid = "user_1", rewardCredits = 3),
             emitPrivate = true
         )
+        runCurrent()
         advanceUntilIdle()
 
         collectedByFourteenSubscribers.forEach { bucket ->
@@ -73,6 +75,7 @@ class AuthRepositorySessionTest {
         }
 
         jobs.forEach { it.cancelAndJoin() }
+        runCurrent()
         advanceUntilIdle()
 
         assertEquals(0, gateway.activeAuthListenerCount)
@@ -88,6 +91,7 @@ class AuthRepositorySessionTest {
 
         val states = mutableListOf<AuthSessionState>()
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
+        runCurrent()
         advanceUntilIdle()
 
         // Guest initially
@@ -97,8 +101,10 @@ class AuthRepositorySessionTest {
 
         // Regular user signs in
         gateway.emitAuthState(AuthUserIdentity(uid = "regular_1", isEmailVerified = true))
+        runCurrent()
         advanceUntilIdle()
         gateway.emitIdTokenRefresh()
+        runCurrent()
         advanceUntilIdle()
 
         assertEquals(0, gateway.forcedTokenRefreshCalls)
@@ -107,6 +113,7 @@ class AuthRepositorySessionTest {
         assertFalse(states.last().isAdmin)
 
         job.cancelAndJoin()
+        runCurrent()
         advanceUntilIdle()
         assertEquals(0, gateway.activeAuthListenerCount)
         assertEquals(0, gateway.activeIdTokenListenerCount)
@@ -124,9 +131,11 @@ class AuthRepositorySessionTest {
 
         val states = mutableListOf<AuthSessionState>()
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
+        runCurrent()
         advanceUntilIdle()
 
         gateway.emitUserDocs(uid = "user_doc_only", adminDocExists = true)
+        runCurrent()
         advanceUntilIdle()
 
         assertTrue(states.isNotEmpty())
@@ -140,6 +149,7 @@ class AuthRepositorySessionTest {
         // Server mints admin custom claim -> refreshIdTokenClaims picks it up
         gateway.setUserClaims("user_doc_only", cachedAdmin = false, serverAdmin = true)
         val granted = repo.refreshIdTokenClaims(forceRefresh = true).getOrThrow()
+        runCurrent()
         advanceUntilIdle()
         assertTrue(granted)
         assertTrue(states.last().isAdmin)
@@ -148,6 +158,7 @@ class AuthRepositorySessionTest {
         // Server revokes admin custom claim while admins doc remains -> refresh catches revocation
         gateway.setUserClaims("user_doc_only", cachedAdmin = true, serverAdmin = false)
         val stillAdmin = repo.refreshIdTokenClaims(forceRefresh = true).getOrThrow()
+        runCurrent()
         advanceUntilIdle()
         assertFalse(stillAdmin)
         assertFalse(states.last().hasAdminClaim)
@@ -156,12 +167,14 @@ class AuthRepositorySessionTest {
         // Re-grant after revocation via ClaimSyncEvent must not be dropped
         gateway.setUserClaims("user_doc_only", cachedAdmin = false, serverAdmin = true)
         val reGranted = repo.refreshIdTokenClaims(forceRefresh = true).getOrThrow()
+        runCurrent()
         advanceUntilIdle()
         assertTrue(reGranted)
         assertTrue(states.last().hasAdminClaim)
         assertTrue(states.last().isAdmin)
 
         job.cancelAndJoin()
+        runCurrent()
         advanceUntilIdle()
         assertEquals(0, gateway.activeAuthListenerCount)
         assertEquals(0, gateway.activeIdTokenListenerCount)
@@ -178,6 +191,7 @@ class AuthRepositorySessionTest {
 
         val states = mutableListOf<AuthSessionState>()
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
+        runCurrent()
         advanceUntilIdle()
 
         // Must never emit isAdmin=true or hasAdminClaim=true from unverified cached claim while online
@@ -189,6 +203,7 @@ class AuthRepositorySessionTest {
         assertFalse(states.last().isAdmin)
 
         job.cancelAndJoin()
+        runCurrent()
         advanceUntilIdle()
         assertEquals(0, gateway.activeAuthListenerCount)
         assertEquals(0, gateway.activeIdTokenListenerCount)
@@ -204,10 +219,12 @@ class AuthRepositorySessionTest {
 
         val states = mutableListOf<AuthSessionState>()
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
+        runCurrent()
         advanceUntilIdle()
 
         // Account A signs in as Admin with full profile
         gateway.emitAuthState(AuthUserIdentity(uid = "user_a", isEmailVerified = true))
+        runCurrent()
         advanceUntilIdle()
         gateway.emitUserDocs(
             uid = "user_a",
@@ -217,6 +234,7 @@ class AuthRepositorySessionTest {
             emitPrivate = true,
             adminDocExists = true
         )
+        runCurrent()
         advanceUntilIdle()
         assertTrue(states.isNotEmpty())
         assertTrue(states.last().isAdmin)
@@ -224,6 +242,7 @@ class AuthRepositorySessionTest {
 
         // Direct switch to Account B without intermediate null
         gateway.emitAuthState(AuthUserIdentity(uid = "user_b", isEmailVerified = true))
+        runCurrent()
         advanceUntilIdle()
 
         val switchedState = states.last()
@@ -238,12 +257,14 @@ class AuthRepositorySessionTest {
 
         // Late callback from user_a's old listener must actually fire and be rejected by AuthRepository
         gateway.emitStalePublicDocToAnyListener("user_a", PublicUser(uid = "user_a", name = "Stale A"))
+        runCurrent()
         advanceUntilIdle()
         assertEquals(1, gateway.staleDocCallbacksInvoked)
         assertNull(states.last().publicProfile)
 
         // Sign out clears user_b completely
         repo.signOut()
+        runCurrent()
         advanceUntilIdle()
         val signedOutState = states.last()
         assertFalse(signedOutState.isSignedIn)
@@ -254,6 +275,7 @@ class AuthRepositorySessionTest {
         assertEquals(0, gateway.activeUserDocsCount)
 
         job.cancelAndJoin()
+        runCurrent()
         advanceUntilIdle()
         assertEquals(0, gateway.activeAuthListenerCount)
         assertEquals(0, gateway.activeIdTokenListenerCount)
@@ -270,6 +292,7 @@ class AuthRepositorySessionTest {
 
         val states = mutableListOf<AuthSessionState>()
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
+        runCurrent()
         advanceUntilIdle()
 
         // Forced check failed offline -> fallback kept cached claim safely
@@ -279,18 +302,21 @@ class AuthRepositorySessionTest {
 
         // Refresh while still offline returns failure cleanly
         assertTrue(repo.refreshIdTokenClaims(forceRefresh = true).isFailure)
+        runCurrent()
         advanceUntilIdle()
         assertTrue(states.last().isAdmin)
 
         // Internet returns -> forced refresh discovers server revocation
         gateway.isNetworkOnline = true
         val refreshed = repo.refreshIdTokenClaims(forceRefresh = true).getOrThrow()
+        runCurrent()
         advanceUntilIdle()
         assertFalse(refreshed)
         assertFalse(states.last().isAdmin)
         assertFalse(states.last().hasAdminClaim)
 
         job.cancelAndJoin()
+        runCurrent()
         advanceUntilIdle()
         assertEquals(0, gateway.activeAuthListenerCount)
         assertEquals(0, gateway.activeIdTokenListenerCount)
