@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -90,6 +91,8 @@ class AuthRepositorySessionTest {
         advanceUntilIdle()
 
         // Guest initially
+        assertTrue(states.isNotEmpty())
+        assertFalse(states.last().isSignedIn)
         assertEquals(0, gateway.forcedTokenRefreshCalls)
 
         // Regular user signs in
@@ -99,6 +102,7 @@ class AuthRepositorySessionTest {
         advanceUntilIdle()
 
         assertEquals(0, gateway.forcedTokenRefreshCalls)
+        assertTrue(states.isNotEmpty())
         assertTrue(states.last().isSignedIn)
         assertFalse(states.last().isAdmin)
 
@@ -125,6 +129,7 @@ class AuthRepositorySessionTest {
         gateway.emitUserDocs(uid = "user_doc_only", adminDocExists = true)
         advanceUntilIdle()
 
+        assertTrue(states.isNotEmpty())
         val afterDocOnly = states.last()
         assertTrue(afterDocOnly.hasAdminDoc)
         assertFalse(afterDocOnly.hasAdminClaim)
@@ -176,6 +181,7 @@ class AuthRepositorySessionTest {
         advanceUntilIdle()
 
         // Must never emit isAdmin=true or hasAdminClaim=true from unverified cached claim while online
+        assertTrue(states.isNotEmpty())
         assertTrue(states.none { it.isAdmin })
         assertTrue(states.none { it.hasAdminClaim })
         assertEquals(1, gateway.forcedTokenRefreshCalls)
@@ -212,6 +218,7 @@ class AuthRepositorySessionTest {
             adminDocExists = true
         )
         advanceUntilIdle()
+        assertTrue(states.isNotEmpty())
         assertTrue(states.last().isAdmin)
         assertEquals("Admin A", states.last().publicProfile?.name)
 
@@ -229,9 +236,10 @@ class AuthRepositorySessionTest {
         assertEquals(1, gateway.activeUserDocsCount)
         assertEquals(listOf("user_a", "user_b"), gateway.observedDocUidsHistory)
 
-        // Late callback from user_a must be ignored
+        // Late callback from user_a's old listener must actually fire and be rejected by AuthRepository
         gateway.emitStalePublicDocToAnyListener("user_a", PublicUser(uid = "user_a", name = "Stale A"))
         advanceUntilIdle()
+        assertEquals(1, gateway.staleDocCallbacksInvoked)
         assertNull(states.last().publicProfile)
 
         // Sign out clears user_b completely
@@ -265,6 +273,7 @@ class AuthRepositorySessionTest {
         advanceUntilIdle()
 
         // Forced check failed offline -> fallback kept cached claim safely
+        assertTrue(states.isNotEmpty())
         assertTrue(states.last().hasAdminClaim)
         assertTrue(states.last().isAdmin)
 
@@ -297,11 +306,13 @@ class AuthRepositorySessionTest {
         val job = launch {
             repo.observeAuthSession().first { it.uid == "user_timeout" }
         }
-        advanceUntilIdle()
+        runCurrent()
         job.join()
 
         // Before 5s grace period elapses, listeners stay warm
         assertEquals(1, gateway.activeAuthListenerCount)
+        assertEquals(1, gateway.activeIdTokenListenerCount)
+        assertEquals(1, gateway.activeUserDocsCount)
         advanceTimeBy(5_001L)
         advanceUntilIdle()
 

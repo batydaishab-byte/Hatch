@@ -41,18 +41,19 @@ import com.hatch.marketplace.data.repository.MonetizationRepository
 import com.hatch.marketplace.data.repository.ProductRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -273,12 +274,27 @@ class HatchMainViewModel internal constructor(
         if (Locale.getDefault().language.equals("ar", ignoreCase = true)) AppLanguage.AR else AppLanguage.EN
     )
     private var productViewsBeforeAd = 0
+    private var lastObservedSessionUid: String? = null
+    private var lastObservedIsAdmin: Boolean = false
+    private var lastCommercialSyncKey: List<Any?>? = null
+    private var commercialSyncJob: Job? = null
 
     // Single shared AuthSession flow across all ViewModel collectors & repository flatMapLatest streams.
+    // Side-effects execute once upstream of shareIn and detach as soon as uiState's WhileSubscribed(5000) stops.
     private val authSessionFlow = authRepo.observeAuthSession()
+        .onEach { session ->
+            handleSessionSideEffects(session)
+        }
+        .onCompletion {
+            commercialSyncJob?.cancel()
+            commercialSyncJob = null
+        }
         .shareIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.WhileSubscribed(
+                stopTimeoutMillis = 0L,
+                replayExpirationMillis = 0L
+            ),
             replay = 1
         )
 
@@ -529,75 +545,6 @@ class HatchMainViewModel internal constructor(
             authRepo.verifyFirestoreServerConnection()
         }
         viewModelScope.launch {
-            authSessionFlow
-                .distinctUntilChangedBy {
-                    listOf(
-                        it.publicProfile?.uid,
-                        it.publicProfile?.accountType,
-                        it.publicProfile?.name,
-                        it.publicProfile?.city,
-                        it.publicProfile?.businessActivity,
-                        it.publicProfile?.businessLogo,
-                        it.publicProfile?.avatar,
-                        it.publicProfile?.status,
-                        it.publicProfile?.dealsCompleted,
-                        it.publicProfile?.verifiedIdentity
-                    )
-                }
-                .collectLatest { session ->
-                    val profile = session.publicProfile
-                    if (session.isSignedIn && profile != null) {
-                        authRepo.ensureCommercialProfileSynced(profile)
-                    }
-                }
-        }
-        viewModelScope.launch {
-            var previousUid: String? = null
-            var previousIsAdmin = false
-            authSessionFlow
-                .distinctUntilChangedBy { Triple(it.uid, it.isAdmin, it.isSignedIn) }
-                .collect { session ->
-                    val currentUid = session.uid
-                    val uidChanged = previousUid != null && previousUid != currentUid
-                    if (uidChanged) {
-                        clearUserScopedState()
-                    } else if (previousIsAdmin && !session.isAdmin) {
-                        val currentLocal = _localState.value
-                        val wasInAdminUi = currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null
-                        if (wasInAdminUi) {
-                            if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
-                                _activeConversationId.value = currentLocal.activeConversationId
-                            }
-                            _localState.update { state ->
-                                state.copy(
-                                    activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
-                                    adminAuditConversation = null
-                                )
-                            }
-                            showToast(
-                                if (isArabic()) "تم تحديث الجلسة: لا توجد صلاحية إدارة نشطة" else "Session updated: admin access is not active",
-                                ToastType.WARNING
-                            )
-                        }
-                    } else if (!session.isAdmin) {
-                        val currentLocal = _localState.value
-                        if (currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null) {
-                            if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
-                                _activeConversationId.value = currentLocal.activeConversationId
-                            }
-                            _localState.update { state ->
-                                state.copy(
-                                    activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
-                                    adminAuditConversation = null
-                                )
-                            }
-                        }
-                    }
-                    previousUid = currentUid
-                    previousIsAdmin = session.isAdmin
-                }
-        }
-        viewModelScope.launch {
             var wasOffline = false
             streams.isOnlineFlow
                 .distinctUntilChanged()
@@ -612,6 +559,81 @@ class HatchMainViewModel internal constructor(
                         }
                     }
                 }
+        }
+    }
+
+    private fun handleSessionSideEffects(session: AuthSessionState) {
+        val currentUid = session.uid
+        val uidChanged = lastObservedSessionUid != null && lastObservedSessionUid != currentUid
+        if (uidChanged) {
+            lastCommercialSyncKey = null
+            commercialSyncJob?.cancel()
+            commercialSyncJob = null
+            clearUserScopedState()
+        } else if (lastObservedIsAdmin && !session.isAdmin) {
+            val currentLocal = _localState.value
+            val wasInAdminUi = currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null
+            if (wasInAdminUi) {
+                if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
+                    _activeConversationId.value = currentLocal.activeConversationId
+                }
+                _localState.update { state ->
+                    state.copy(
+                        activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
+                        adminAuditConversation = null
+                    )
+                }
+                showToast(
+                    if (isArabic()) "تم تحديث الجلسة: لا توجد صلاحية إدارة نشطة" else "Session updated: admin access is not active",
+                    ToastType.WARNING
+                )
+            }
+        } else if (!session.isAdmin) {
+            val currentLocal = _localState.value
+            if (currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null) {
+                if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
+                    _activeConversationId.value = currentLocal.activeConversationId
+                }
+                _localState.update { state ->
+                    state.copy(
+                        activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
+                        adminAuditConversation = null
+                    )
+                }
+            }
+        }
+        lastObservedSessionUid = currentUid
+        lastObservedIsAdmin = session.isAdmin
+
+        val profile = session.publicProfile
+        val commercialKey = if (session.isSignedIn && profile != null) {
+            listOf(
+                profile.uid,
+                profile.accountType,
+                profile.name,
+                profile.city,
+                profile.businessActivity,
+                profile.businessLogo,
+                profile.avatar,
+                profile.status,
+                profile.dealsCompleted,
+                profile.verifiedIdentity
+            )
+        } else {
+            null
+        }
+        if (commercialKey != lastCommercialSyncKey) {
+            lastCommercialSyncKey = commercialKey
+            commercialSyncJob?.cancel()
+            commercialSyncJob = null
+            if (session.isSignedIn && profile != null && AccountType.fromWire(profile.accountType).isCommercial()) {
+                val expectedUid = session.uid
+                commercialSyncJob = viewModelScope.launch {
+                    if (lastObservedSessionUid == expectedUid) {
+                        authRepo.ensureCommercialProfileSynced(profile)
+                    }
+                }
+            }
         }
     }
 
@@ -903,6 +925,11 @@ class HatchMainViewModel internal constructor(
     }
 
     fun signOut() {
+        lastObservedSessionUid = null
+        lastObservedIsAdmin = false
+        lastCommercialSyncKey = null
+        commercialSyncJob?.cancel()
+        commercialSyncJob = null
         authRepo.signOut()
         clearUserScopedState()
         _localState.update { it.copy(showAuthSheet = false) }

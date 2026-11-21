@@ -40,6 +40,8 @@ internal class FakeAuthSessionGateway(
         private set
     var reloadAndRefreshCalls: Int = 0
         private set
+    var staleDocCallbacksInvoked: Int = 0
+        private set
 
     val observedDocUidsHistory = mutableListOf<String>()
     val activeAuthListenerCount: Int get() = authListenerRegistrations - authListenerRemovals
@@ -57,6 +59,7 @@ internal class FakeAuthSessionGateway(
     )
 
     private val activeDocCallbacks = linkedMapOf<Int, DocCallbacks>()
+    private val retainedDocCallbacksHistory = mutableListOf<DocCallbacks>()
     private var nextDocId = 1
 
     fun setUserClaims(uid: String, cachedAdmin: Boolean, serverAdmin: Boolean = cachedAdmin) {
@@ -89,7 +92,8 @@ internal class FakeAuthSessionGateway(
     }
 
     fun emitStalePublicDocToAnyListener(uid: String, staleUser: PublicUser) {
-        activeDocCallbacks.values.filter { it.uid == uid }.toList().forEach { cb ->
+        retainedDocCallbacksHistory.filter { it.uid == uid }.toList().forEach { cb ->
+            staleDocCallbacksInvoked++
             cb.onPublic(true, staleUser)
         }
     }
@@ -170,7 +174,9 @@ internal class FakeAuthSessionGateway(
         userDocsRegistrations++
         observedDocUidsHistory.add(uid)
         val id = nextDocId++
-        activeDocCallbacks[id] = DocCallbacks(uid, onPublic, onPrivate, onAdminDoc)
+        val callbacks = DocCallbacks(uid, onPublic, onPrivate, onAdminDoc)
+        activeDocCallbacks[id] = callbacks
+        retainedDocCallbacksHistory.add(callbacks)
         return {
             if (activeDocCallbacks.remove(id) != null) {
                 userDocsRemovals++
