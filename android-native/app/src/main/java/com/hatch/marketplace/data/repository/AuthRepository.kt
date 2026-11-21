@@ -22,16 +22,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -246,8 +248,17 @@ class AuthRepository internal constructor(
         stopTimeoutMillis = 5_000L
     )
 
+    private data class ClaimSyncEvent(
+        val uid: String,
+        val isEmailVerified: Boolean,
+        val hasAdminClaim: Boolean,
+        val verifiedWithServer: Boolean,
+        val sequence: Long
+    )
+
     val isConfigured: Boolean get() = clients.isConfigured
-    private val forcedClaimEvents = MutableSharedFlow<Pair<String, Boolean>>(extraBufferCapacity = 8)
+    private val claimSyncSeq = AtomicLong(0L)
+    private val claimSyncState = MutableStateFlow<ClaimSyncEvent?>(null)
 
     private val sharedAuthSessionFlow: SharedFlow<AuthSessionState> by lazy {
         createRawAuthSessionFlow()
@@ -284,12 +295,17 @@ class AuthRepository internal constructor(
         var lastObservedVerified: Boolean? = null
         var lastAdminVerifyUid: String? = null
         var lastAdminPromoteRefreshUid: String? = null
+        var sessionSeqCutoff = claimSyncSeq.get()
 
         fun emitState(user: AuthUserIdentity?) {
+            val liveUid = gateway.currentUser()?.uid
             if (user == null) {
+                if (lastObservedUid != null || liveUid != null) return
                 trySend(AuthSessionState(isFirebaseConnected = gateway.hasFirestore))
                 return
             }
+            if (lastObservedUid != user.uid) return
+            if (liveUid != null && liveUid != user.uid) return
             val verifiedEmail = user.isEmailVerified
             val effectiveClaim = verifiedEmail && hasAdminClaim
             val effectiveDoc = verifiedEmail && hasAdminDoc
@@ -318,20 +334,25 @@ class AuthRepository internal constructor(
         fun syncClaimsFromToken(user: AuthUserIdentity, forceRefresh: Boolean) {
             gateway.fetchIdTokenAdminClaim(user.uid, forceRefresh) { result ->
                 val active = gateway.currentUser()
-                if (active == null || active.uid != user.uid) return@fetchIdTokenAdminClaim
+                if (active == null || active.uid != user.uid || lastObservedUid != user.uid) {
+                    return@fetchIdTokenAdminClaim
+                }
                 result.onSuccess { rawClaim ->
                     val claim = active.isEmailVerified && rawClaim
-                    if (hasAdminClaim != claim) {
-                        hasAdminClaim = claim
-                        emitState(active)
-                    } else if (!forceRefresh && lastObservedVerified != active.isEmailVerified) {
-                        emitState(active)
-                    }
-                    // Verify once against server per session start ONLY if cached token claims admin
-                    // (or if an admin doc appeared), avoiding routine STS calls for regular users.
+                    // Never grant Admin privileges from a cached token before verifying with the server.
                     if (!forceRefresh && claim && lastAdminVerifyUid != active.uid) {
                         lastAdminVerifyUid = active.uid
                         syncClaimsFromToken(active, forceRefresh = true)
+                        return@fetchIdTokenAdminClaim
+                    }
+                    if (forceRefresh) {
+                        lastAdminVerifyUid = active.uid
+                    }
+                    val verificationChanged = lastObservedVerified != active.isEmailVerified
+                    lastObservedVerified = active.isEmailVerified
+                    if (hasAdminClaim != claim || verificationChanged) {
+                        hasAdminClaim = claim
+                        emitState(active)
                     }
                 }.onFailure { e ->
                     logger.w("HatchAuthFlow", "getIdToken(forceRefresh=$forceRefresh) failed: ${e.javaClass.simpleName}")
@@ -345,10 +366,12 @@ class AuthRepository internal constructor(
                         // Fallback cleanly to cached token when offline
                         gateway.fetchIdTokenAdminClaim(active.uid, forceRefresh = false) { cachedResult ->
                             val stillActive = gateway.currentUser()
-                            if (stillActive != null && stillActive.uid == active.uid) {
+                            if (stillActive != null && stillActive.uid == active.uid && lastObservedUid == active.uid) {
                                 cachedResult.onSuccess { rawCached ->
                                     val cachedClaim = stillActive.isEmailVerified && rawCached
-                                    if (hasAdminClaim != cachedClaim) {
+                                    val verificationChanged = lastObservedVerified != stillActive.isEmailVerified
+                                    lastObservedVerified = stillActive.isEmailVerified
+                                    if (hasAdminClaim != cachedClaim || verificationChanged) {
                                         hasAdminClaim = cachedClaim
                                         emitState(stillActive)
                                     }
@@ -360,19 +383,30 @@ class AuthRepository internal constructor(
             }
         }
 
-        val forcedJob = launch {
-            forcedClaimEvents.collectLatest { (uid, claim) ->
-                val activeUser = gateway.currentUser()
-                if (activeUser != null && activeUser.uid == uid) {
-                    hasAdminClaim = activeUser.isEmailVerified && claim
-                    lastObservedVerified = activeUser.isEmailVerified
-                    emitState(activeUser)
+        val claimSyncJob = launch {
+            claimSyncState
+                .filterNotNull()
+                .filter { it.sequence > sessionSeqCutoff }
+                .collect { event ->
+                    val activeUser = gateway.currentUser()
+                    if (activeUser != null && activeUser.uid == event.uid && lastObservedUid == event.uid) {
+                        val effectiveClaim = activeUser.isEmailVerified && event.hasAdminClaim
+                        val changed = hasAdminClaim != effectiveClaim ||
+                            lastObservedVerified != activeUser.isEmailVerified
+                        hasAdminClaim = effectiveClaim
+                        lastObservedVerified = activeUser.isEmailVerified
+                        if (event.verifiedWithServer) {
+                            lastAdminVerifyUid = event.uid
+                        }
+                        if (changed) {
+                            emitState(activeUser)
+                        }
+                    }
                 }
-            }
         }
 
         val cleanupIdTokenListener = gateway.registerIdTokenListener { user ->
-            if (user != null && user.uid == lastObservedUid) {
+            if (user != null && user.uid == lastObservedUid && gateway.currentUser()?.uid == user.uid) {
                 syncClaimsFromToken(user, forceRefresh = false)
             }
         }
@@ -383,11 +417,15 @@ class AuthRepository internal constructor(
                 lastObservedVerified = user.isEmailVerified
                 if (verificationChanged) {
                     syncClaimsFromToken(user, forceRefresh = false)
+                    emitState(user)
                 }
-                emitState(user)
                 return@registerAuthStateListener
             }
 
+            sessionSeqCutoff = claimSyncSeq.get()
+            if (claimSyncState.value?.uid != user?.uid) {
+                claimSyncState.value = null
+            }
             lastObservedUid = user?.uid
             lastObservedVerified = user?.isEmailVerified
             cleanupUserDocs?.invoke()
@@ -424,20 +462,26 @@ class AuthRepository internal constructor(
             cleanupUserDocs = gateway.observeUserDocs(
                 uid = observedUid,
                 onPublic = { loaded, parsed ->
-                    if (lastObservedUid != observedUid) return@observeUserDocs
+                    if (lastObservedUid != observedUid || gateway.currentUser()?.uid != observedUid) {
+                        return@observeUserDocs
+                    }
                     publicLoaded = loaded
                     currentPublic = parsed
                     val active = gateway.currentUser()?.takeIf { it.uid == observedUid } ?: user
                     emitState(active)
                 },
                 onPrivate = { parsed ->
-                    if (lastObservedUid != observedUid) return@observeUserDocs
+                    if (lastObservedUid != observedUid || gateway.currentUser()?.uid != observedUid) {
+                        return@observeUserDocs
+                    }
                     currentPrivate = parsed
                     val active = gateway.currentUser()?.takeIf { it.uid == observedUid } ?: user
                     emitState(active)
                 },
                 onAdminDoc = { docExists ->
-                    if (lastObservedUid != observedUid) return@observeUserDocs
+                    if (lastObservedUid != observedUid || gateway.currentUser()?.uid != observedUid) {
+                        return@observeUserDocs
+                    }
                     val docChanged = hasAdminDoc != docExists
                     hasAdminDoc = docExists
                     val active = gateway.currentUser()?.takeIf { it.uid == observedUid } ?: user
@@ -455,7 +499,7 @@ class AuthRepository internal constructor(
         }
 
         awaitClose {
-            forcedJob.cancel()
+            claimSyncJob.cancel()
             cleanupAuthListener()
             cleanupIdTokenListener()
             cleanupUserDocs?.invoke()
@@ -484,8 +528,18 @@ class AuthRepository internal constructor(
         if (!gateway.hasAuth) error("Firebase Auth unavailable")
         val resolved = gateway.reloadAndGetAdminClaim(forceRefresh).getOrThrow() ?: return@runCatching false
         val (uid, claim) = resolved
-        forcedClaimEvents.tryEmit(uid to claim)
-        claim
+        val activeUser = gateway.currentUser()
+        val effectiveClaim = activeUser != null && activeUser.uid == uid && activeUser.isEmailVerified && claim
+        if (activeUser != null && activeUser.uid == uid) {
+            claimSyncState.value = ClaimSyncEvent(
+                uid = uid,
+                isEmailVerified = activeUser.isEmailVerified,
+                hasAdminClaim = effectiveClaim,
+                verifiedWithServer = forceRefresh,
+                sequence = claimSyncSeq.incrementAndGet()
+            )
+        }
+        effectiveClaim
     }
 
     suspend fun verifyFirestoreServerConnection(): Result<Boolean> = runCatching {

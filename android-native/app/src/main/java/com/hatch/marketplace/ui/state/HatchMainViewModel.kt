@@ -552,10 +552,16 @@ class HatchMainViewModel internal constructor(
                 }
         }
         viewModelScope.launch {
+            var previousUid: String? = null
+            var previousIsAdmin = false
             authSessionFlow
-                .distinctUntilChangedBy { it.uid to it.isAdmin }
-                .collectLatest { session ->
-                    if (!session.isAdmin) {
+                .distinctUntilChangedBy { Triple(it.uid, it.isAdmin, it.isSignedIn) }
+                .collect { session ->
+                    val currentUid = session.uid
+                    val uidChanged = previousUid != null && previousUid != currentUid
+                    if (uidChanged) {
+                        clearUserScopedState()
+                    } else if (previousIsAdmin && !session.isAdmin) {
                         val currentLocal = _localState.value
                         val wasInAdminUi = currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null
                         if (wasInAdminUi) {
@@ -573,19 +579,22 @@ class HatchMainViewModel internal constructor(
                                 ToastType.WARNING
                             )
                         }
-                    }
-                }
-        }
-        viewModelScope.launch {
-            var previousUid: String? = null
-            authSessionFlow
-                .map { it.uid }
-                .distinctUntilChanged()
-                .collect { currentUid ->
-                    if (previousUid != null && previousUid != currentUid) {
-                        clearUserScopedState()
+                    } else if (!session.isAdmin) {
+                        val currentLocal = _localState.value
+                        if (currentLocal.activeTab == MainTab.ADMIN || currentLocal.adminAuditConversation != null) {
+                            if (_activeConversationId.value == currentLocal.adminAuditConversation?.id) {
+                                _activeConversationId.value = currentLocal.activeConversationId
+                            }
+                            _localState.update { state ->
+                                state.copy(
+                                    activeTab = if (state.activeTab == MainTab.ADMIN) MainTab.SWIPE else state.activeTab,
+                                    adminAuditConversation = null
+                                )
+                            }
+                        }
                     }
                     previousUid = currentUid
+                    previousIsAdmin = session.isAdmin
                 }
         }
         viewModelScope.launch {
@@ -625,9 +634,11 @@ class HatchMainViewModel internal constructor(
         }
         _localState.update { it.copy(activeTab = tab) }
         if (tab == MainTab.ADMIN) {
+            val requestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid ?: return
             viewModelScope.launch {
                 val hasClaim = authRepo.refreshIdTokenClaims(forceRefresh = true).getOrDefault(uiState.value.auth.hasAdminClaim)
-                if (hasClaim) {
+                val latestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
+                if (hasClaim && latestUid == requestUid) {
                     refreshCloudinaryQuota()
                 }
             }
@@ -680,12 +691,16 @@ class HatchMainViewModel internal constructor(
     fun triggerPullToRefresh() {
         viewModelScope.launch {
             _localState.update { it.copy(isRefreshing = true) }
+            val startUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
             authRepo.verifyFirestoreServerConnection()
-            val currentAuth = uiState.value.auth
-            if (currentAuth.isSignedIn && (currentAuth.hasAdminClaim || currentAuth.hasAdminDoc)) {
+            val currentAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+            if (currentAuth.uid == startUid && currentAuth.isSignedIn && (currentAuth.hasAdminClaim || currentAuth.hasAdminDoc)) {
                 authRepo.refreshIdTokenClaims(forceRefresh = true)
             }
-            if (uiState.value.isAdmin) refreshCloudinaryQuota()
+            val latestAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+            if (latestAuth.uid == startUid && latestAuth.isAdmin) {
+                refreshCloudinaryQuota()
+            }
             delay(500)
             _localState.update { it.copy(isRefreshing = false) }
         }
@@ -906,6 +921,9 @@ class HatchMainViewModel internal constructor(
                 activeConversationId = null,
                 readBroadcastIds = emptySet(),
                 cloudinaryQuota = CloudinaryQuotaStatus(),
+                isRefreshing = false,
+                isSubmitting = false,
+                toasts = emptyList(),
                 selectedProduct = null,
                 selectedBusinessSellerId = null,
                 commercialDirectoryType = null,
@@ -917,6 +935,7 @@ class HatchMainViewModel internal constructor(
                 reportRequest = null,
                 adminAuditConversation = null,
                 showSellModal = false,
+                showAuthSheet = false,
                 forceOnboardingStep = false,
                 authErrorMessage = null,
                 showEditProfileDialog = false,
@@ -1176,16 +1195,19 @@ class HatchMainViewModel internal constructor(
                         )
                     repo.sendOffer(tempConv, buyer.uid, amount, note)
                         .onSuccess {
-                            _activeConversationId.value = convId
-                            _localState.update {
-                                it.copy(
-                                    offerTargetProduct = null,
-                                    selectedProduct = null,
-                                    activeConversationId = convId,
-                                    activeTab = MainTab.CHAT
-                                )
+                            val latestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
+                            if (latestUid == buyer.uid) {
+                                _activeConversationId.value = convId
+                                _localState.update {
+                                    it.copy(
+                                        offerTargetProduct = null,
+                                        selectedProduct = null,
+                                        activeConversationId = convId,
+                                        activeTab = MainTab.CHAT
+                                    )
+                                }
+                                showToast(if (isArabic()) "تم إرسال عرضك للبائع" else "Offer sent to seller", ToastType.SUCCESS)
                             }
-                            showToast(if (isArabic()) "تم إرسال عرضك للبائع" else "Offer sent to seller", ToastType.SUCCESS)
                         }
                         .onFailure { e -> showToast(e.localizedMessage ?: "Offer failed", ToastType.ERROR) }
                 }
@@ -1205,13 +1227,16 @@ class HatchMainViewModel internal constructor(
         viewModelScope.launch {
             repo.startOrGetConversation(product, buyer)
                 .onSuccess { convId ->
-                    _activeConversationId.value = convId
-                    _localState.update {
-                        it.copy(
-                            selectedProduct = null,
-                            activeConversationId = convId,
-                            activeTab = MainTab.CHAT
-                        )
+                    val latestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
+                    if (latestUid == buyer.uid) {
+                        _activeConversationId.value = convId
+                        _localState.update {
+                            it.copy(
+                                selectedProduct = null,
+                                activeConversationId = convId,
+                                activeTab = MainTab.CHAT
+                            )
+                        }
                     }
                 }
                 .onFailure { e -> showToast(e.localizedMessage ?: "Chat error", ToastType.ERROR) }
@@ -1222,10 +1247,13 @@ class HatchMainViewModel internal constructor(
         _activeConversationId.value = conv?.id
         _localState.update { it.copy(activeConversationId = conv?.id) }
         if (uiState.value.isCurrentlySuspended) return
-        val uid = uiState.value.auth.uid ?: return
+        val uid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid ?: return
         if (conv != null) {
             viewModelScope.launch {
-                chatRepo?.markConversationRead(conv, uid, uiState.value.activeMessages)
+                val latestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
+                if (latestUid == uid) {
+                    chatRepo?.markConversationRead(conv, uid, uiState.value.activeMessages)
+                }
             }
         }
     }
@@ -1704,14 +1732,24 @@ class HatchMainViewModel internal constructor(
     }
 
     fun refreshCloudinaryQuota() {
-        if (!uiState.value.isAdmin) return
+        val currentAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+        val requestUid = currentAuth.uid ?: return
+        if (!currentAuth.isAdmin) return
         viewModelScope.launch {
-            streams.fetchAdminQuotaStatus(uiState.value.isAdmin)
-                .onSuccess { status -> _localState.update { it.copy(cloudinaryQuota = status) } }
+            streams.fetchAdminQuotaStatus(true)
+                .onSuccess { status ->
+                    val latestAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+                    if (latestAuth.uid == requestUid && latestAuth.isAdmin) {
+                        _localState.update { it.copy(cloudinaryQuota = status) }
+                    }
+                }
                 .onFailure { e ->
-                    val msg = e.message.orEmpty()
-                    if (msg.contains("401") || msg.contains("403") || msg.contains("Forbidden", ignoreCase = true)) {
-                        authRepo.refreshIdTokenClaims(forceRefresh = true)
+                    val latestAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+                    if (latestAuth.uid == requestUid) {
+                        val msg = e.message.orEmpty()
+                        if (msg.contains("401") || msg.contains("403") || msg.contains("Forbidden", ignoreCase = true)) {
+                            authRepo.refreshIdTokenClaims(forceRefresh = true)
+                        }
                     }
                 }
         }
@@ -1722,13 +1760,17 @@ class HatchMainViewModel internal constructor(
         fallback: String,
         overrideMessage: String? = null
     ) {
+        val requestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
         val isPermissionError = (error as? FirebaseFirestoreException)?.code == FirebaseFirestoreException.Code.PERMISSION_DENIED ||
             error.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true ||
             error.message?.contains("403") == true ||
             error.message?.contains("Forbidden", ignoreCase = true) == true
-        if (isPermissionError) {
+        if (isPermissionError && requestUid != null) {
             viewModelScope.launch {
-                authRepo.refreshIdTokenClaims(forceRefresh = true)
+                val latestUid = (authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth).uid
+                if (latestUid == requestUid) {
+                    authRepo.refreshIdTokenClaims(forceRefresh = true)
+                }
             }
         }
         showToast(overrideMessage ?: error.localizedMessage ?: fallback, ToastType.ERROR)

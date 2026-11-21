@@ -103,6 +103,10 @@ class AuthRepositorySessionTest {
         assertFalse(states.last().isAdmin)
 
         job.cancelAndJoin()
+        advanceUntilIdle()
+        assertEquals(0, gateway.activeAuthListenerCount)
+        assertEquals(0, gateway.activeIdTokenListenerCount)
+        assertEquals(0, gateway.activeUserDocsCount)
     }
 
     @Test
@@ -144,7 +148,19 @@ class AuthRepositorySessionTest {
         assertFalse(states.last().hasAdminClaim)
         assertFalse(states.last().isAdmin)
 
+        // Re-grant after revocation via ClaimSyncEvent must not be dropped
+        gateway.setUserClaims("user_doc_only", cachedAdmin = false, serverAdmin = true)
+        val reGranted = repo.refreshIdTokenClaims(forceRefresh = true).getOrThrow()
+        advanceUntilIdle()
+        assertTrue(reGranted)
+        assertTrue(states.last().hasAdminClaim)
+        assertTrue(states.last().isAdmin)
+
         job.cancelAndJoin()
+        advanceUntilIdle()
+        assertEquals(0, gateway.activeAuthListenerCount)
+        assertEquals(0, gateway.activeIdTokenListenerCount)
+        assertEquals(0, gateway.activeUserDocsCount)
     }
 
     @Test
@@ -159,11 +175,18 @@ class AuthRepositorySessionTest {
         val job = launch { repo.observeAuthSession().collect { states.add(it) } }
         advanceUntilIdle()
 
+        // Must never emit isAdmin=true or hasAdminClaim=true from unverified cached claim while online
+        assertTrue(states.none { it.isAdmin })
+        assertTrue(states.none { it.hasAdminClaim })
         assertEquals(1, gateway.forcedTokenRefreshCalls)
         assertFalse(states.last().hasAdminClaim)
         assertFalse(states.last().isAdmin)
 
         job.cancelAndJoin()
+        advanceUntilIdle()
+        assertEquals(0, gateway.activeAuthListenerCount)
+        assertEquals(0, gateway.activeIdTokenListenerCount)
+        assertEquals(0, gateway.activeUserDocsCount)
     }
 
     @Test
@@ -204,6 +227,7 @@ class AuthRepositorySessionTest {
         assertFalse(switchedState.hasAdminClaim)
         assertFalse(switchedState.hasAdminDoc)
         assertEquals(1, gateway.activeUserDocsCount)
+        assertEquals(listOf("user_a", "user_b"), gateway.observedDocUidsHistory)
 
         // Late callback from user_a must be ignored
         gateway.emitStalePublicDocToAnyListener("user_a", PublicUser(uid = "user_a", name = "Stale A"))
@@ -222,6 +246,10 @@ class AuthRepositorySessionTest {
         assertEquals(0, gateway.activeUserDocsCount)
 
         job.cancelAndJoin()
+        advanceUntilIdle()
+        assertEquals(0, gateway.activeAuthListenerCount)
+        assertEquals(0, gateway.activeIdTokenListenerCount)
+        assertEquals(0, gateway.activeUserDocsCount)
     }
 
     @Test
@@ -251,8 +279,13 @@ class AuthRepositorySessionTest {
         advanceUntilIdle()
         assertFalse(refreshed)
         assertFalse(states.last().isAdmin)
+        assertFalse(states.last().hasAdminClaim)
 
         job.cancelAndJoin()
+        advanceUntilIdle()
+        assertEquals(0, gateway.activeAuthListenerCount)
+        assertEquals(0, gateway.activeIdTokenListenerCount)
+        assertEquals(0, gateway.activeUserDocsCount)
     }
 
     @Test

@@ -8,11 +8,13 @@ import com.hatch.marketplace.data.model.NotificationItem
 import com.hatch.marketplace.data.model.PrivateUser
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.PublicUser
+import com.hatch.marketplace.data.model.ToastType
 import com.hatch.marketplace.data.remote.FirebaseClientsHolder
 import com.hatch.marketplace.data.repository.AuthRepository
 import com.hatch.marketplace.data.repository.AuthUserIdentity
 import com.hatch.marketplace.data.repository.FakeAuthSessionGateway
 import com.hatch.marketplace.data.repository.NoOpAuthSessionLogger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -59,7 +62,12 @@ class HatchMainViewModelSessionTest {
         val viewModel: HatchMainViewModel
     )
 
-    private fun createHarness(scope: kotlinx.coroutines.CoroutineScope): TestHarness {
+    private fun createHarness(
+        scope: kotlinx.coroutines.CoroutineScope,
+        fetchAdminQuotaStatus: suspend (Boolean) -> Result<CloudinaryQuotaStatus> = { isAdmin ->
+            Result.success(CloudinaryQuotaStatus(creditsUsed = if (isAdmin) 5.5 else 0.0, videoUploadsEnabled = isAdmin))
+        }
+    ): TestHarness {
         val gateway = FakeAuthSessionGateway()
         val authRepo = AuthRepository(
             clients = FirebaseClientsHolder(app = null, auth = null, firestore = null),
@@ -93,9 +101,7 @@ class HatchMainViewModelSessionTest {
                 notifsByUser.map { if (uid == null) emptyList() else it[uid].orEmpty() }
             },
             isOnlineFlow = isOnline,
-            fetchAdminQuotaStatus = { isAdmin ->
-                Result.success(CloudinaryQuotaStatus(creditsUsed = if (isAdmin) 5.5 else 0.0, videoUploadsEnabled = isAdmin))
-            }
+            fetchAdminQuotaStatus = fetchAdminQuotaStatus
         )
 
         val vm = HatchMainViewModel(
@@ -122,7 +128,7 @@ class HatchMainViewModelSessionTest {
     }
 
     @Test
-    fun viewModelSubscribesOnceToObserveAuthSessionAndSkipsProfileOnlyListenerRestarts() = runTest {
+    fun viewModelSubscribesOnceToObserveAuthSessionAndSkipsProfileOnlyListenerRestarts() = runTest(mainDispatcher) {
         val harness = createHarness(backgroundScope)
         val uiJob = launch { harness.viewModel.uiState.collect {} }
 
@@ -135,9 +141,11 @@ class HatchMainViewModelSessionTest {
         assertEquals(1, harness.gateway.idTokenListenerRegistrations)
         assertEquals(1, harness.gateway.userDocsRegistrations)
         assertEquals(0, harness.gateway.forcedTokenRefreshCalls)
+        assertEquals(listOf("u1" to false), harness.productsObserveCalls)
+        assertEquals(listOf("u1"), harness.favoritesObserveCalls)
 
-        val productsCountAfterSignIn = harness.productsObserveCalls.size
-        val favsCountAfterSignIn = harness.favoritesObserveCalls.size
+        val productsCallsAfterSignIn = harness.productsObserveCalls.toList()
+        val favsCallsAfterSignIn = harness.favoritesObserveCalls.toList()
 
         // Profile/credit changes update uiState.auth WITHOUT restarting downstream collection listeners
         harness.gateway.emitUserDocs(
@@ -160,8 +168,8 @@ class HatchMainViewModelSessionTest {
         )
         advanceUntilIdle()
         assertEquals("بورتسودان", harness.viewModel.uiState.value.currentUser?.city)
-        assertEquals(productsCountAfterSignIn, harness.productsObserveCalls.size)
-        assertEquals(favsCountAfterSignIn, harness.favoritesObserveCalls.size)
+        assertEquals(productsCallsAfterSignIn, harness.productsObserveCalls)
+        assertEquals(favsCallsAfterSignIn, harness.favoritesObserveCalls)
 
         // Regular user pull-to-refresh does NOT force getIdToken(true)
         harness.viewModel.triggerPullToRefresh()
@@ -172,10 +180,13 @@ class HatchMainViewModelSessionTest {
         uiJob.cancel()
         advanceTimeBy(6_000L)
         advanceUntilIdle()
+        assertEquals(0, harness.gateway.activeAuthListenerCount)
+        assertEquals(0, harness.gateway.activeIdTokenListenerCount)
+        assertEquals(0, harness.gateway.activeUserDocsCount)
     }
 
     @Test
-    fun accountSwitchAndSignOutClearAllPreviousUserDataCompletely() = runTest {
+    fun accountSwitchAndSignOutClearAllPreviousUserDataCompletely() = runTest(mainDispatcher) {
         val harness = createHarness(backgroundScope)
         val uiJob = launch { harness.viewModel.uiState.collect {} }
 
@@ -220,28 +231,36 @@ class HatchMainViewModelSessionTest {
         // Direct switch to User 2 (non-admin) -> ALL User 1 data must be gone
         harness.gateway.setUserClaims("u2", cachedAdmin = false, serverAdmin = false)
         harness.gateway.emitAuthState(AuthUserIdentity(uid = "u2", isEmailVerified = true))
-        advanceUntilIdle()
+        runCurrent()
         harness.gateway.emitUserDocs(
             uid = "u2",
             publicUser = PublicUser(uid = "u2", name = "User Two", city = "عطبرة"),
             emitPublic = true,
             adminDocExists = false
         )
+        advanceTimeBy(100L)
+        runCurrent()
+
+        val u2StateImmediate = harness.viewModel.uiState.value
+        assertEquals("u2", u2StateImmediate.auth.uid)
+        assertEquals("User Two", u2StateImmediate.currentUser?.name)
+        assertFalse(u2StateImmediate.isAdmin)
+        assertEquals(MainTab.SWIPE, u2StateImmediate.activeTab)
+        assertTrue(u2StateImmediate.passedProductIds.isEmpty())
+        assertTrue(u2StateImmediate.readBroadcastIds.isEmpty())
+        assertNull(u2StateImmediate.activeConversationId)
+        assertNull(u2StateImmediate.adminAuditConversation)
+        assertTrue(u2StateImmediate.favoriteIds.isEmpty())
+        assertEquals(listOf("conv_u2"), u2StateImmediate.conversations.map { it.id })
+        assertEquals(0.0, u2StateImmediate.cloudinaryQuota.creditsUsed, 0.001)
+        assertFalse(u2StateImmediate.showAuthSheet)
+        assertTrue(u2StateImmediate.toasts.isEmpty())
+        // Public marketplace catalog stays intact across account switch
+        assertTrue(u2StateImmediate.products.isNotEmpty())
+
         advanceUntilIdle()
 
-        val u2State = harness.viewModel.uiState.value
-        assertEquals("u2", u2State.auth.uid)
-        assertEquals("User Two", u2State.currentUser?.name)
-        assertFalse(u2State.isAdmin)
-        assertEquals(MainTab.SWIPE, u2State.activeTab)
-        assertTrue(u2State.passedProductIds.isEmpty())
-        assertTrue(u2State.readBroadcastIds.isEmpty())
-        assertNull(u2State.activeConversationId)
-        assertTrue(u2State.favoriteIds.isEmpty())
-        assertEquals(listOf("conv_u2"), u2State.conversations.map { it.id })
-        assertEquals(0.0, u2State.cloudinaryQuota.creditsUsed, 0.001)
-
-        // Sign out returns cleanly to Guest mode with zero user data
+        // Sign out returns cleanly to Guest mode with zero user data while keeping public market data
         harness.viewModel.browseNextSwipeCard(Product(id = "prod_1"))
         harness.viewModel.signOut()
         advanceUntilIdle()
@@ -253,6 +272,54 @@ class HatchMainViewModelSessionTest {
         assertTrue(guestState.conversations.isEmpty())
         assertTrue(guestState.notifications.isEmpty())
         assertEquals(MainTab.SWIPE, guestState.activeTab)
+        assertFalse(guestState.showAuthSheet)
+        assertTrue(guestState.products.isNotEmpty())
+
+        uiJob.cancel()
+        advanceTimeBy(6_000L)
+        advanceUntilIdle()
+        assertEquals(0, harness.gateway.activeAuthListenerCount)
+        assertEquals(0, harness.gateway.activeIdTokenListenerCount)
+        assertEquals(0, harness.gateway.activeUserDocsCount)
+    }
+
+    @Test
+    fun lateAdminQuotaCallbackIgnoredAfterAccountSwitch() = runTest(mainDispatcher) {
+        val deferredQuota = CompletableDeferred<Result<CloudinaryQuotaStatus>>()
+        val harness = createHarness(
+            scope = backgroundScope,
+            fetchAdminQuotaStatus = { deferredQuota.await() }
+        )
+        val uiJob = launch { harness.viewModel.uiState.collect {} }
+
+        harness.gateway.setUserClaims("u1", cachedAdmin = true, serverAdmin = true)
+        harness.gateway.emitAuthState(AuthUserIdentity(uid = "u1", isEmailVerified = true))
+        advanceUntilIdle()
+        harness.gateway.emitUserDocs(
+            uid = "u1",
+            publicUser = PublicUser(uid = "u1", name = "Admin One", city = "الخرطوم"),
+            emitPublic = true,
+            adminDocExists = true
+        )
+        advanceUntilIdle()
+
+        // Launch admin quota fetch for u1 while suspended
+        harness.viewModel.selectTab(MainTab.ADMIN)
+        runCurrent()
+
+        // Switch account to u2 before u1's Cloudinary quota network request finishes
+        harness.gateway.setUserClaims("u2", cachedAdmin = false, serverAdmin = false)
+        harness.gateway.emitAuthState(AuthUserIdentity(uid = "u2", isEmailVerified = true))
+        advanceUntilIdle()
+
+        // Late u1 admin response arrives after u2 is already active -> must be dropped
+        deferredQuota.complete(Result.success(CloudinaryQuotaStatus(creditsUsed = 42.0, videoUploadsEnabled = true)))
+        advanceUntilIdle()
+
+        val u2State = harness.viewModel.uiState.value
+        assertEquals("u2", u2State.auth.uid)
+        assertEquals(0.0, u2State.cloudinaryQuota.creditsUsed, 0.001)
+        assertFalse(u2State.cloudinaryQuota.videoUploadsEnabled)
 
         uiJob.cancel()
         advanceTimeBy(6_000L)
@@ -260,7 +327,7 @@ class HatchMainViewModelSessionTest {
     }
 
     @Test
-    fun adminRevocationOnTabSelectAndNetworkReconnectExitsAdminUiImmediately() = runTest {
+    fun adminRevocationOnTabSelectAndNetworkReconnectExitsAdminUiImmediately() = runTest(mainDispatcher) {
         val harness = createHarness(backgroundScope)
         val uiJob = launch { harness.viewModel.uiState.collect {} }
 
@@ -286,7 +353,7 @@ class HatchMainViewModelSessionTest {
         advanceUntilIdle()
         harness.gateway.setUserClaims("admin_1", cachedAdmin = true, serverAdmin = false)
 
-        // Tapping pull-to-refresh or staying offline keeps session without crashing
+        // Staying offline keeps session without crashing
         harness.viewModel.selectTab(MainTab.ADMIN)
         advanceUntilIdle()
         assertTrue(harness.viewModel.uiState.value.isAdmin)
@@ -294,16 +361,22 @@ class HatchMainViewModelSessionTest {
         // Internet reconnects -> triggers admin re-verification -> boots out of Admin tab immediately
         harness.gateway.isNetworkOnline = true
         harness.isOnlineFlow.value = true
-        advanceUntilIdle()
+        advanceTimeBy(100L)
+        runCurrent()
 
         val recoveredState = harness.viewModel.uiState.value
         assertFalse(recoveredState.isAdmin)
         assertFalse(recoveredState.auth.hasAdminClaim)
         assertEquals(MainTab.SWIPE, recoveredState.activeTab)
         assertNull(recoveredState.adminAuditConversation)
+        assertTrue(recoveredState.toasts.any { it.type == ToastType.WARNING })
 
+        advanceUntilIdle()
         uiJob.cancel()
         advanceTimeBy(6_000L)
         advanceUntilIdle()
+        assertEquals(0, harness.gateway.activeAuthListenerCount)
+        assertEquals(0, harness.gateway.activeIdTokenListenerCount)
+        assertEquals(0, harness.gateway.activeUserDocsCount)
     }
 }
