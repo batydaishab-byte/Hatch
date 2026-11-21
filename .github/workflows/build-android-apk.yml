@@ -182,6 +182,65 @@ jobs:
           set +x
           gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
 
+      - name: Upload Unit Test JUnit & HTML Reports (Temporary Diagnostic)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hatch-android-unit-test-reports
+          path: |
+            android-native/app/build/test-results/testDebugUnitTest/
+            android-native/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Print Unit Test Failure Details from JUnit XML
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import xml.etree.ElementTree as ET
+
+          files = sorted(glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml"))
+          if not files:
+              print("No JUnit XML files found under app/build/test-results/testDebugUnitTest/.")
+              raise SystemExit(0)
+
+          summary_lines = ["### Android Unit Test Failure Details"]
+          found_failure = False
+          for path in files:
+              tree = ET.parse(path)
+              root = tree.getroot()
+              for tc in root.findall("testcase"):
+                  for tag in ("failure", "error"):
+                      node = tc.find(tag)
+                      if node is not None:
+                          found_failure = True
+                          cls = tc.attrib.get("classname", "")
+                          name = tc.attrib.get("name", "")
+                          msg = node.attrib.get("message", "")
+                          typ = node.attrib.get("type", tag)
+                          body = (node.text or "").strip()
+                          print(f"\n=== {cls} > {name} [{typ}] ===")
+                          if msg:
+                              print(f"Message: {msg}")
+                          if body:
+                              print(body)
+                          summary_lines.append(f"#### `{cls} > {name}` ({typ})")
+                          if msg:
+                              summary_lines.append(f"- **Message:** `{msg}`")
+                          if body:
+                              summary_lines.append("```\n" + body + "\n```")
+
+          if not found_failure:
+              print("No <failure> or <error> nodes found in JUnit XML files.")
+          else:
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as f:
+                      f.write("\n".join(summary_lines) + "\n")
+          PY
+
       - name: Extract APK Signing Certificate Fingerprints (SHA-1 & SHA-256)
         run: |
           APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
