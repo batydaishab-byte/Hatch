@@ -3,6 +3,7 @@ package com.hatch.marketplace.data.repository
 import android.util.Log
 import com.google.firebase.auth.AuthCredential
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
@@ -552,14 +553,33 @@ class AuthRepository internal constructor(
         true
     }
 
+    internal fun validateCanInitiateSignIn(): Result<Unit> = runCatching {
+        val activeIdentity = gateway.currentUser()
+        if (activeIdentity != null && !activeIdentity.isAnonymous) {
+            throw IllegalStateException("You are already signed in to your HATCH account.")
+        }
+        val currentFirebase = clients.auth?.currentUser
+        if (currentFirebase != null && !currentFirebase.isAnonymous) {
+            throw IllegalStateException("You are already signed in to your HATCH account.")
+        }
+    }
+
     suspend fun signInWithCredential(credential: AuthCredential): Result<FirebaseUser> = runCatching {
+        validateCanInitiateSignIn().getOrThrow()
         val auth = clients.auth ?: error("Firebase Auth unavailable")
-        val res = auth.signInWithCredential(credential).await()
+        val res = try {
+            auth.signInWithCredential(credential).await()
+        } catch (collision: FirebaseAuthUserCollisionException) {
+            throw IllegalStateException(
+                "هذا البريد الإلكتروني مرتبط بطريقة تسجيل دخول سابقة. تم الحفاظ على بيانات الحساب دون حذف أو دمج تلقائي.",
+                collision
+            )
+        }
         val user = res.user ?: auth.currentUser ?: error("Google Sign-In returned empty user")
-        Log.d("HatchAuthFlow", "Firebase signInWithCredential success: isNewUser=${res.additionalUserInfo?.isNewUser}")
+        logger.d("HatchAuthFlow", "Firebase signInWithCredential success: isNewUser=${res.additionalUserInfo?.isNewUser}")
         user
     }.onFailure { e ->
-        Log.e("HatchAuthFlow", "Firebase signInWithCredential failed: ${e.javaClass.simpleName}")
+        logger.e("HatchAuthFlow", "Firebase signInWithCredential failed: ${e.javaClass.simpleName}")
     }
 
     suspend fun signInWithGoogleAndCheckProfile(credential: AuthCredential): Result<GoogleAuthOutcome> = runCatching {
@@ -572,7 +592,7 @@ class AuthRepository internal constructor(
         val snap = try {
             publicRef.get(Source.SERVER).await()
         } catch (serverErr: Exception) {
-            Log.w(
+            logger.w(
                 "HatchAuthFlow",
                 "Server profile lookup fallback to default source: ${serverErr.javaClass.simpleName}"
             )
@@ -582,41 +602,13 @@ class AuthRepository internal constructor(
         val name = snap.getString("name").orEmpty()
         val city = snap.getString("city").orEmpty()
         val needsOnboarding = !snap.exists() || name.isBlank() || city.isBlank()
-        Log.d(
+        logger.d(
             "HatchAuthFlow",
             "Post-Google profile check: docExists=${snap.exists()}, hasName=${name.isNotBlank()}, hasCity=${city.isNotBlank()}, needsOnboarding=$needsOnboarding"
         )
         GoogleAuthOutcome(user = activeUser, needsOnboarding = needsOnboarding)
     }.onFailure { e ->
-        Log.e("HatchAuthFlow", "signInWithGoogleAndCheckProfile failed: ${e.javaClass.simpleName}")
-    }
-
-    suspend fun signInWithEmailPassword(email: String, password: String): Result<FirebaseUser> = runCatching {
-        val auth = clients.auth ?: error("Firebase Auth unavailable")
-        val res = auth.signInWithEmailAndPassword(email.trim(), password).await()
-        res.user ?: error("Email sign-in failed")
-    }
-
-    suspend fun signUpWithEmailPassword(
-        email: String,
-        password: String,
-        name: String,
-        phone: String,
-        city: String,
-        avatar: String
-    ): Result<FirebaseUser> = runCatching {
-        val auth = clients.auth ?: error("Firebase Auth unavailable")
-        val res = auth.createUserWithEmailAndPassword(email.trim(), password).await()
-        val user = res.user ?: error("Account creation failed")
-        saveOnboardingProfile(
-            uid = user.uid,
-            email = user.email ?: email.trim(),
-            name = name,
-            phone = phone,
-            city = city,
-            avatar = avatar
-        ).getOrThrow()
-        user
+        logger.e("HatchAuthFlow", "signInWithGoogleAndCheckProfile failed: ${e.javaClass.simpleName}")
     }
 
     suspend fun saveOnboardingProfile(
@@ -630,6 +622,10 @@ class AuthRepository internal constructor(
         businessActivity: String = "",
         businessLogo: String = ""
     ): Result<Unit> = runCatching {
+        val activeUid = gateway.currentUser()?.uid ?: clients.auth?.currentUser?.uid
+        if (activeUid != null && activeUid != uid) {
+            throw IllegalStateException("Active session UID mismatch.")
+        }
         val db = clients.firestore ?: error("Firestore unavailable")
         val resolvedType = AccountType.fromWire(accountType)
         val cleanName = name.trim().take(80)
@@ -657,7 +653,11 @@ class AuthRepository internal constructor(
         val publicRef = db.collection("users_public").document(uid)
         val privateRef = db.collection("users_private").document(uid)
 
-        val existingPublic = publicRef.get().await()
+        val existingPublic = try {
+            publicRef.get(Source.SERVER).await()
+        } catch (_: Exception) {
+            publicRef.get().await()
+        }
         if (!existingPublic.exists()) {
             val publicPayload = hashMapOf<String, Any>(
                 "uid" to uid,
@@ -681,6 +681,11 @@ class AuthRepository internal constructor(
             }
             publicRef.set(publicPayload).await()
         } else {
+            val existingName = existingPublic.getString("name").orEmpty()
+            val existingCity = existingPublic.getString("city").orEmpty()
+            if (existingName.isNotBlank() && existingCity.isNotBlank()) {
+                throw IllegalStateException("Profile already exists for this account.")
+            }
             publicRef.update(
                 mapOf(
                     "name" to cleanName,
@@ -694,7 +699,11 @@ class AuthRepository internal constructor(
             ).await()
         }
 
-        val existingPrivate = privateRef.get().await()
+        val existingPrivate = try {
+            privateRef.get(Source.SERVER).await()
+        } catch (_: Exception) {
+            privateRef.get().await()
+        }
         if (!existingPrivate.exists()) {
             val privatePayload = hashMapOf<String, Any>(
                 "uid" to uid,

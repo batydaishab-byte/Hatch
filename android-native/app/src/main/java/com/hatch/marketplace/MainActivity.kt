@@ -184,6 +184,16 @@ fun HatchMarketplaceRoot(
 
     fun launchGoogleSignIn() {
         viewModel.clearAuthError()
+        if (viewModel.uiState.value.isSignedIn) {
+            viewModel.reportAuthError(
+                if (state.language == AppLanguage.AR) {
+                    "أنت مسجل الدخول بالفعل بهذا الحساب. يمكنك تعديل بياناتك من الملف الشخصي."
+                } else {
+                    "You are already signed in to your HATCH account."
+                }
+            )
+            return
+        }
         val webClientResId = context.resources.getIdentifier(
             "default_web_client_id",
             "string",
@@ -217,20 +227,17 @@ fun HatchMarketplaceRoot(
             .requestEmail()
             .build()
         val client = GoogleSignIn.getClient(context, gso)
-        // Always show the device Google account chooser instead of silently reusing a cached account
-        client.signOut().addOnCompleteListener {
-            runCatching {
-                googleSignInLauncher.launch(client.signInIntent)
-            }.onFailure { err ->
-                Log.e("HatchAuthFlow", "Failed to launch Google Sign-In intent: ${err::class.java.simpleName}")
-                viewModel.reportAuthError(
-                    if (state.language == AppLanguage.AR) {
-                        "تعذر فتح نافذة اختيار حساب Google على هذا الجهاز."
-                    } else {
-                        "Unable to open Google account chooser on this device."
-                    }
-                )
-            }
+        runCatching {
+            googleSignInLauncher.launch(client.signInIntent)
+        }.onFailure { err ->
+            Log.e("HatchAuthFlow", "Failed to launch Google Sign-In intent: ${err::class.java.simpleName}")
+            viewModel.reportAuthError(
+                if (state.language == AppLanguage.AR) {
+                    "تعذر فتح نافذة تسجيل الدخول عبر Google على هذا الجهاز."
+                } else {
+                    "Unable to open Google Sign-In on this device."
+                }
+            )
         }
     }
 
@@ -619,7 +626,7 @@ fun HatchMarketplaceRoot(
             )
         }
 
-        if (state.showAuthSheet) {
+        if (state.showAuthSheet && (!state.isSignedIn || state.isOnboardingRequired)) {
             CreateAccountAuthSheet(
                 needsOnboarding = state.isOnboardingRequired,
                 defaultName = state.auth.firebaseUser?.displayName.orEmpty(),
@@ -767,17 +774,19 @@ fun HatchMarketplaceRoot(
             }
         }
 
-        state.guestPromptReason?.let { reason ->
-            GuestAuthPromptDialog(
-                reason = reason,
-                language = state.language,
-                strings = strings,
-                onContinueWithGoogle = {
-                    viewModel.dismissGuestPrompt()
-                    launchGoogleSignIn()
-                },
-                onDismiss = { viewModel.dismissGuestPrompt() }
-            )
+        if (!state.isSignedIn) {
+            state.guestPromptReason?.let { reason ->
+                GuestAuthPromptDialog(
+                    reason = reason,
+                    language = state.language,
+                    strings = strings,
+                    onContinueWithGoogle = {
+                        viewModel.dismissGuestPrompt()
+                        launchGoogleSignIn()
+                    },
+                    onDismiss = { viewModel.dismissGuestPrompt() }
+                )
+            }
         }
     }
 }

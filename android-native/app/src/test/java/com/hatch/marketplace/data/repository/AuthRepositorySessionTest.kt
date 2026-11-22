@@ -347,4 +347,28 @@ class AuthRepositorySessionTest {
         assertEquals(0, gateway.activeIdTokenListenerCount)
         assertEquals(0, gateway.activeUserDocsCount)
     }
+
+    @Test
+    fun signInWithCredentialAndSaveOnboardingRejectMidSessionAccountSwitch() = runTest {
+        val gateway = FakeAuthSessionGateway()
+        val repo = createRepo(gateway, backgroundScope, stopTimeoutMillis = 0L)
+        assertTrue(repo.validateCanInitiateSignIn().isSuccess)
+
+        gateway.emitAuthState(AuthUserIdentity(uid = "user_1", isEmailVerified = true))
+
+        val signInAttempt = repo.validateCanInitiateSignIn()
+        assertTrue(signInAttempt.isFailure)
+        assertTrue(signInAttempt.exceptionOrNull() is IllegalStateException)
+
+        val mismatchedOnboarding = repo.saveOnboardingProfile(
+            uid = "user_2",
+            email = "other@example.com",
+            name = "مستخدم آخر",
+            phone = "+249912345678",
+            city = "الخرطوم",
+            avatar = ""
+        )
+        assertTrue(mismatchedOnboarding.isFailure)
+        assertTrue(mismatchedOnboarding.exceptionOrNull() is IllegalStateException)
+    }
 }

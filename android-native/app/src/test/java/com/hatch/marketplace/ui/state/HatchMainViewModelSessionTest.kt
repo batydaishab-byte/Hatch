@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelStore
 import com.hatch.marketplace.data.media.CloudinaryQuotaStatus
 import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.Conversation
+import com.hatch.marketplace.data.model.GuestPromptReason
 import com.hatch.marketplace.data.model.MainTab
 import com.hatch.marketplace.data.model.NotificationItem
 import com.hatch.marketplace.data.model.PrivateUser
@@ -408,6 +409,76 @@ class HatchMainViewModelSessionTest {
             assertTrue(recoveredState.toasts.any { it.type == ToastType.WARNING })
 
             advanceUntilIdle()
+            uiJob.cancel()
+            advanceTimeBy(6_000L)
+            advanceUntilIdle()
+            assertEquals(0, harness.gateway.activeAuthListenerCount)
+            assertEquals(0, harness.gateway.activeIdTokenListenerCount)
+            assertEquals(0, harness.gateway.activeUserDocsCount)
+        } finally {
+            uiJob.cancel()
+            harness.viewModelStore.clear()
+        }
+    }
+
+    @Test
+    fun signedInUserWithCompleteProfileCannotOpenAuthSheetOrSwitchAccountMidSession() = runTest(mainDispatcher) {
+        val harness = createHarness(backgroundScope)
+        val uiJob = launch { harness.viewModel.uiState.collect {} }
+        try {
+            harness.gateway.setUserClaims("u1", cachedAdmin = false, serverAdmin = false)
+            harness.gateway.emitAuthState(AuthUserIdentity(uid = "u1", isEmailVerified = true))
+            runCurrent()
+            advanceUntilIdle()
+            harness.gateway.emitUserDocs(
+                uid = "u1",
+                publicUser = PublicUser(uid = "u1", name = "سارة", city = "الخرطوم"),
+                privateUser = PrivateUser(uid = "u1", phone = "+249912345678"),
+                emitPublic = true,
+                emitPrivate = true
+            )
+            runCurrent()
+            advanceUntilIdle()
+
+            assertTrue(harness.viewModel.uiState.value.isSignedIn)
+            assertFalse(harness.viewModel.uiState.value.isOnboardingRequired)
+            assertFalse(harness.viewModel.uiState.value.showAuthSheet)
+
+            // Signed-in user with a complete profile cannot open auth/account-creation sheet or guest prompt
+            harness.viewModel.openAuthSheet()
+            harness.viewModel.requestGuestPrompt(GuestPromptReason.SELL)
+            runCurrent()
+            assertFalse(harness.viewModel.uiState.value.showAuthSheet)
+            assertNull(harness.viewModel.uiState.value.guestPromptReason)
+
+            // Mid-session sign-in attempt must be blocked without changing UID
+            assertTrue(harness.viewModel.blockSignInIfAlreadyActive())
+            runCurrent()
+            advanceUntilIdle()
+            assertEquals("u1", harness.viewModel.uiState.value.auth.uid)
+            assertTrue(harness.viewModel.uiState.value.authErrorMessage != null)
+
+            // Onboarding cannot overwrite an already complete profile
+            harness.viewModel.saveOnboardingProfile(
+                name = "حساب آخر",
+                phone = "+249911111111",
+                city = "عطبرة",
+                avatar = ""
+            )
+            runCurrent()
+            advanceUntilIdle()
+            assertEquals("سارة", harness.viewModel.uiState.value.currentUser?.name)
+            assertFalse(harness.viewModel.uiState.value.showAuthSheet)
+
+            // Manual sign-out returns cleanly to Guest mode where sign-in sheet can open again
+            harness.viewModel.signOut()
+            runCurrent()
+            advanceUntilIdle()
+            assertFalse(harness.viewModel.uiState.value.isSignedIn)
+            harness.viewModel.openAuthSheet()
+            runCurrent()
+            assertTrue(harness.viewModel.uiState.value.showAuthSheet)
+
             uiJob.cancel()
             advanceTimeBy(6_000L)
             advanceUntilIdle()

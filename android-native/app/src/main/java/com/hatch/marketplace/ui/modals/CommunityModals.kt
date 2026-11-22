@@ -328,7 +328,7 @@ fun CreateAccountAuthSheet(
                                     fontSize = 15.sp
                                 )
                                 Text(
-                                    text = if (language == AppLanguage.AR) "اختر حساب Google الخاص بك من الجهاز للمتابعة" else "Choose your Google account on this device to continue",
+                                    text = if (language == AppLanguage.AR) "سجّل الدخول بحساب Google الموحد لحسابك في هتش" else "Sign in with your Google account for your HATCH profile",
                                     color = HatchTextMuted,
                                     fontSize = 11.sp
                                 )
@@ -373,9 +373,9 @@ fun CreateAccountAuthSheet(
                             Icon(Icons.Rounded.VerifiedUser, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
                             Text(
                                 text = if (language == AppLanguage.AR) {
-                                    "بعد اختيار حساب Google، ستختار نوع حسابك (شخصي، متجر، أو شركة) وتكمل بياناتك مرة واحدة فقط."
+                                    "عند دخولك لأول مرة بحساب Google، ستكمل بيانات ملفك في هتش مرة واحدة فقط؛ وفي كل دخول لاحق يُفتح ملفك الحالي تلقائياً."
                                 } else {
-                                    "After picking your Google account, you will choose Personal, Store, or Company and complete your profile once."
+                                    "On your first Google sign-in, you will complete your HATCH profile once; future sign-ins automatically open your existing profile."
                                 },
                                 color = HatchTextMuted,
                                 fontSize = 11.sp

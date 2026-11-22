@@ -508,6 +508,10 @@ class HatchMainViewModel internal constructor(
             }
         }
 
+        val needsOnboardingNow = core.auth.isSignedIn && (core.auth.needsProfileOnboarding || local.forceOnboardingStep)
+        val effectiveShowAuthSheet = if (core.auth.isSignedIn) needsOnboardingNow else local.showAuthSheet
+        val effectiveGuestPrompt = if (core.auth.isSignedIn) null else local.guestPromptReason
+
         local.copy(
             language = settings.language,
             isOnline = settings.isOnline,
@@ -528,7 +532,8 @@ class HatchMainViewModel internal constructor(
             adConfig = settings.adConfig,
             filter = local.filter.copy(selectedCity = settings.selectedCity),
             searchHistory = settings.searchHistory,
-            showAuthSheet = local.showAuthSheet || (core.auth.isSignedIn && (core.auth.needsProfileOnboarding || local.forceOnboardingStep))
+            guestPromptReason = effectiveGuestPrompt,
+            showAuthSheet = effectiveShowAuthSheet
         )
     }.stateIn(
         scope = viewModelScope,
@@ -638,6 +643,10 @@ class HatchMainViewModel internal constructor(
     }
 
     fun requestGuestPrompt(reason: GuestPromptReason) {
+        val activeAuth = authSessionFlow.replayCache.lastOrNull()
+        if (uiState.value.isSignedIn || activeAuth?.isSignedIn == true || authRepo.currentFirebaseUser() != null) {
+            return
+        }
         _localState.update { it.copy(guestPromptReason = reason) }
     }
 
@@ -729,6 +738,13 @@ class HatchMainViewModel internal constructor(
     }
 
     fun openAuthSheet() {
+        val state = uiState.value
+        val activeAuth = authSessionFlow.replayCache.lastOrNull()
+        val signedIn = state.isSignedIn || activeAuth?.isSignedIn == true || authRepo.currentFirebaseUser() != null
+        val needsOnboarding = state.isOnboardingRequired ||
+            (activeAuth?.isSignedIn == true && activeAuth.needsProfileOnboarding) ||
+            _localState.value.forceOnboardingStep
+        if (signedIn && !needsOnboarding) return
         _localState.update { it.copy(showAuthSheet = true, authErrorMessage = null) }
     }
 
@@ -738,7 +754,7 @@ class HatchMainViewModel internal constructor(
     }
 
     fun reportAuthError(message: String) {
-        android.util.Log.w("HatchAuthFlow", "Auth UI error reported")
+        runCatching { android.util.Log.w("HatchAuthFlow", "Auth UI error reported") }
         _localState.update { it.copy(authErrorMessage = message) }
         showToast(message, ToastType.ERROR)
     }
@@ -747,7 +763,23 @@ class HatchMainViewModel internal constructor(
         _localState.update { it.copy(authErrorMessage = null) }
     }
 
+    internal fun blockSignInIfAlreadyActive(): Boolean {
+        val activeAuth = authSessionFlow.replayCache.lastOrNull()
+        val signedIn = uiState.value.isSignedIn || activeAuth?.isSignedIn == true || authRepo.currentFirebaseUser() != null
+        if (!signedIn) return false
+        runCatching { android.util.Log.w("HatchAuthFlow", "Blocked mid-session Google sign-in while already signed in") }
+        reportAuthError(
+            if (isArabic()) {
+                "أنت مسجل الدخول بالفعل بهذا الحساب. يمكنك تعديل بياناتك من الملف الشخصي."
+            } else {
+                "You are already signed in to your HATCH account. Edit your details from Profile."
+            }
+        )
+        return true
+    }
+
     fun signInWithGoogleCredential(credential: AuthCredential) {
+        if (blockSignInIfAlreadyActive()) return
         viewModelScope.launch {
             setSubmitting(true)
             clearAuthError()
@@ -802,6 +834,18 @@ class HatchMainViewModel internal constructor(
         businessActivity: String = "",
         businessLogo: String = ""
     ) {
+        val activeAuth = authSessionFlow.replayCache.lastOrNull() ?: uiState.value.auth
+        val existingProfile = activeAuth.publicProfile ?: uiState.value.currentUser
+        if (activeAuth.isSignedIn && existingProfile != null && !MarketplaceLogic.requiresOnboarding(existingProfile)) {
+            _localState.update {
+                it.copy(
+                    forceOnboardingStep = false,
+                    showAuthSheet = false,
+                    authErrorMessage = null
+                )
+            }
+            return
+        }
         val fbUser = uiState.value.auth.firebaseUser ?: authRepo.currentFirebaseUser()
         if (fbUser == null) {
             val msg = if (isArabic()) "انتهت جلسة تسجيل الدخول، يرجى تسجيل الدخول مرة أخرى" else "Auth session lost, please sign in again"
