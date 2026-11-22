@@ -19,9 +19,305 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import java.net.URI
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+
+data class ListingPublishRequest(
+    val seller: PublicUser,
+    val titleAr: String,
+    val titleEn: String,
+    val descriptionAr: String,
+    val descriptionEn: String,
+    val price: Double,
+    val originalPrice: Double?,
+    val category: String,
+    val condition: String,
+    val city: String,
+    val areaAr: String,
+    val areaEn: String,
+    val localImageUris: List<Uri>,
+    val remoteImageUrls: List<String>,
+    val paymentMethods: List<String>,
+    val negotiable: Boolean,
+    val deliveryAvailable: Boolean,
+    val urgentSale: Boolean
+)
+
+sealed class ImageUrlValidationResult {
+    data class Valid(val normalizedUrl: String) : ImageUrlValidationResult()
+    data class Invalid(val messageAr: String, val messageEn: String) : ImageUrlValidationResult()
+}
+
+data class ListingDraftValidationResult(
+    val isValid: Boolean,
+    val resolvedPrice: Double = 0.0,
+    val resolvedOriginalPrice: Double? = null,
+    val resolvedRemoteUrls: List<String> = emptyList(),
+    val errorMessage: String? = null
+)
+
+object ListingPublishValidator {
+    fun normalizeNumericInput(raw: String): String {
+        val sb = StringBuilder(raw.length)
+        var hasDecimalPoint = false
+        for (ch in raw) {
+            when (ch) {
+                in '0'..'9' -> sb.append(ch)
+                in '\u0660'..'\u0669' -> sb.append(('0'.code + (ch.code - '\u0660'.code)).toChar())
+                in '\u06F0'..'\u06F9' -> sb.append(('0'.code + (ch.code - '\u06F0'.code)).toChar())
+                '.', '\u066B' -> {
+                    if (!hasDecimalPoint) {
+                        sb.append('.')
+                        hasDecimalPoint = true
+                    }
+                }
+            }
+        }
+        return sb.toString()
+    }
+
+    fun parsePositivePrice(raw: String): Double? {
+        val normalized = normalizeNumericInput(raw)
+        if (normalized.isBlank() || normalized == ".") return null
+        val parsed = normalized.toDoubleOrNull() ?: return null
+        return parsed.takeIf { it.isFinite() && it > 0.0 }
+    }
+
+    fun isValidHttpsImageUrl(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || trimmed.length > 1000) return false
+        if (trimmed.any { it.isWhitespace() || it.isISOControl() }) return false
+        if (!trimmed.startsWith("https://", ignoreCase = true)) return false
+        val normalized = "https://" + trimmed.substring(8)
+        return try {
+            val uri = URI(normalized)
+            val host = uri.host?.trim().orEmpty()
+            uri.scheme.equals("https", ignoreCase = true) &&
+                host.isNotEmpty() &&
+                host.contains('.') &&
+                !host.startsWith('.') &&
+                !host.endsWith('.')
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun validateManualImageUrl(
+        raw: String,
+        currentCount: Int,
+        existingUrls: List<String> = emptyList(),
+        maxCount: Int = MediaUploadPolicy.MAX_PRODUCT_IMAGES_PER_LISTING
+    ): ImageUrlValidationResult {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "أدخل رابط الصورة أولاً ثم اضغط +.",
+                messageEn = "Enter an image URL first, then tap +."
+            )
+        }
+        if (currentCount >= maxCount) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "وصلت للحد الأقصى ($maxCount صور للإعلان).",
+                messageEn = "Maximum limit reached ($maxCount photos per listing)."
+            )
+        }
+        if (trimmed.any { it.isWhitespace() || it.isISOControl() }) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "رابط الصورة غير صالح: يجب ألا يحتوي على مسافات.",
+                messageEn = "Invalid image URL: must not contain spaces."
+            )
+        }
+        if (trimmed.length > 1000) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "رابط الصورة طويل جداً (الحد الأقصى 1000 حرف).",
+                messageEn = "Image URL is too long (max 1000 characters)."
+            )
+        }
+        if (trimmed.startsWith("http://", ignoreCase = true)) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "لأسباب أمنية، يجب أن يبدأ رابط الصورة بـ https:// وليس http://.",
+                messageEn = "For security, image URLs must start with https://, not http://."
+            )
+        }
+        if (!trimmed.startsWith("https://", ignoreCase = true)) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "رابط الصورة غير صالح: يجب أن يبدأ بـ https://.",
+                messageEn = "Invalid image URL: must start with https://."
+            )
+        }
+        val normalized = "https://" + trimmed.substring(8)
+        if (!isValidHttpsImageUrl(normalized)) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "رابط الصورة غير صالح: تأكد من كتابة اسم النطاق كاملاً بعد https://.",
+                messageEn = "Invalid image URL: make sure the domain name after https:// is valid."
+            )
+        }
+        if (existingUrls.any { it.equals(normalized, ignoreCase = false) }) {
+            return ImageUrlValidationResult.Invalid(
+                messageAr = "تمت إضافة رابط الصورة هذا بالفعل.",
+                messageEn = "This image URL has already been added."
+            )
+        }
+        return ImageUrlValidationResult.Valid(normalized)
+    }
+
+    fun validateDraft(
+        title: String,
+        description: String,
+        priceText: String,
+        originalPriceText: String,
+        city: String,
+        localImageCount: Int,
+        remoteUrls: List<String>,
+        pendingUrlInput: String,
+        paymentMethods: List<String>,
+        signerReady: Boolean,
+        isArabic: Boolean
+    ): ListingDraftValidationResult {
+        fun msg(ar: String, en: String) = if (isArabic) ar else en
+
+        val combinedRemoteUrls = remoteUrls.toMutableList()
+        val pendingTrimmed = pendingUrlInput.trim()
+        if (pendingTrimmed.isNotEmpty()) {
+            when (val urlCheck = validateManualImageUrl(
+                raw = pendingTrimmed,
+                currentCount = localImageCount + combinedRemoteUrls.size,
+                existingUrls = combinedRemoteUrls
+            )) {
+                is ImageUrlValidationResult.Valid -> combinedRemoteUrls.add(urlCheck.normalizedUrl)
+                is ImageUrlValidationResult.Invalid -> {
+                    return ListingDraftValidationResult(
+                        isValid = false,
+                        errorMessage = msg(urlCheck.messageAr, urlCheck.messageEn)
+                    )
+                }
+            }
+        }
+
+        val totalImages = localImageCount + combinedRemoteUrls.size
+        if (totalImages == 0) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى إضافة صورة واحدة على الأقل للمنتج (أو رابط https:// صحيح).",
+                    "Please add at least one product photo (or a valid https:// link)."
+                )
+            )
+        }
+
+        if (localImageCount > 0 && !signerReady) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "رفع صور الهاتف غير مفعّل حالياً (يتطلب إعداد MEDIA_SIGNER_URL). يرجى إزالة صور الهاتف واستخدام رابط صورة يبدأ بـ https://.",
+                    "Direct device photo upload is not enabled yet (requires MEDIA_SIGNER_URL). Remove device photos and use an https:// image link instead."
+                )
+            )
+        }
+
+        if (combinedRemoteUrls.any { !isValidHttpsImageUrl(it) }) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "أحد روابط الصور غير صالح أو لا يبدأ بـ https://.",
+                    "One of the image links is invalid or does not start with https://."
+                )
+            )
+        }
+
+        val cleanTitle = title.trim()
+        if (cleanTitle.length < 2) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى كتابة عنوان الإعلان (حرفان على الأقل).",
+                    "Please enter a listing title (at least 2 characters)."
+                )
+            )
+        }
+        if (cleanTitle.length > 120) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "عنوان الإعلان طويل جداً (الحد الأقصى 120 حرفاً).",
+                    "Listing title is too long (max 120 characters)."
+                )
+            )
+        }
+
+        val parsedPrice = parsePositivePrice(priceText)
+        if (parsedPrice == null) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى إدخال سعر صحيح أكبر من صفر.",
+                    "Please enter a valid price greater than 0."
+                )
+            )
+        }
+        if (parsedPrice > 10_000_000_000.0) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "السعر المدخل يتجاوز الحد المسموح به.",
+                    "Entered price exceeds the allowed limit."
+                )
+            )
+        }
+
+        val parsedOriginalPrice = parsePositivePrice(originalPriceText)
+
+        if (city.trim().length !in 2..100) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى اختيار مدينة صحيحة للإعلان.",
+                    "Please select a valid city for the listing."
+                )
+            )
+        }
+
+        if (paymentMethods.isEmpty()) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى اختيار طريقة دفع واحدة على الأقل.",
+                    "Please select at least one payment method."
+                )
+            )
+        }
+
+        val cleanDescription = description.trim()
+        if (cleanDescription.length < 5) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "يرجى كتابة وصف للسلعة (5 أحرف على الأقل).",
+                    "Please enter a product description (at least 5 characters)."
+                )
+            )
+        }
+        if (cleanDescription.length > 2000) {
+            return ListingDraftValidationResult(
+                isValid = false,
+                errorMessage = msg(
+                    "وصف السلعة طويل جداً (الحد الأقصى 2000 حرف).",
+                    "Description is too long (max 2000 characters)."
+                )
+            )
+        }
+
+        return ListingDraftValidationResult(
+            isValid = true,
+            resolvedPrice = parsedPrice,
+            resolvedOriginalPrice = parsedOriginalPrice,
+            resolvedRemoteUrls = combinedRemoteUrls,
+            errorMessage = null
+        )
+    }
+}
 
 @Singleton
 class ProductRepository @Inject constructor(
@@ -120,7 +416,8 @@ class ProductRepository @Inject constructor(
         require(authUid == seller.uid) { "Seller UID mismatch." }
         require(titleAr.trim().length in 2..120) { "Title must be 2 to 120 characters." }
         require(descriptionAr.trim().length in 5..2000) { "Description must be 5 to 2000 characters." }
-        require(price > 0.0 && price <= 10_000_000_000.0) { "Price must be positive." }
+        require(price.isFinite() && price > 0.0 && price <= 10_000_000_000.0) { "Price must be positive." }
+        require(city.trim().length in 2..100) { "City must be 2 to 100 characters." }
         require(paymentMethods.isNotEmpty()) { "Select at least one payment method." }
 
         val resolvedUrls = mutableListOf<String>()
@@ -140,10 +437,18 @@ class ProductRepository @Inject constructor(
         }
 
         remoteImageUrls.map { it.trim() }
-            .filter { it.startsWith("https://") || it.startsWith("http://") }
-            .forEach { url ->
+            .filter { it.isNotEmpty() }
+            .forEach { rawUrl ->
+                val normalized = if (rawUrl.startsWith("https://", ignoreCase = true)) {
+                    "https://" + rawUrl.substring(8)
+                } else {
+                    rawUrl
+                }
+                require(ListingPublishValidator.isValidHttpsImageUrl(normalized)) {
+                    "Image URL must be a valid https:// link."
+                }
                 if (resolvedUrls.size < MediaUploadPolicy.MAX_PRODUCT_IMAGES_PER_LISTING) {
-                    resolvedUrls.add(url)
+                    resolvedUrls.add(normalized)
                 }
             }
 

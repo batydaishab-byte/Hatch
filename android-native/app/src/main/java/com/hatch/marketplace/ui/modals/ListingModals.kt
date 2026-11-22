@@ -3,6 +3,7 @@ package com.hatch.marketplace.ui.modals
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -10,17 +11,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -86,6 +92,8 @@ import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.SudaneseCities
 import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.data.model.resolvedAccountType
+import com.hatch.marketplace.data.repository.ImageUrlValidationResult
+import com.hatch.marketplace.data.repository.ListingPublishValidator
 import com.hatch.marketplace.ui.i18n.HatchStrings
 import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
@@ -106,6 +114,8 @@ fun SellModal(
     defaultCity: String,
     currentUser: PublicUser? = null,
     isSubmitting: Boolean,
+    publishErrorMessage: String? = null,
+    onClearPublishError: () -> Unit = {},
     language: AppLanguage,
     strings: HatchStrings,
     onDismiss: () -> Unit,
@@ -146,10 +156,20 @@ fun SellModal(
     val remoteUrls = remember { mutableStateListOf<String>() }
     var urlInput by remember { mutableStateOf("") }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+    var urlError by remember { mutableStateOf<String?>(null) }
+
+    val clearErrors = {
+        validationError = null
+        onClearPublishError()
+    }
 
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         val room = MediaUploadPolicy.MAX_PRODUCT_IMAGES_PER_LISTING - (localUris.size + remoteUrls.size)
-        if (room > 0) localUris.addAll(uris.take(room))
+        if (room > 0 && uris.isNotEmpty()) {
+            localUris.addAll(uris.take(room))
+            clearErrors()
+        }
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
@@ -157,6 +177,7 @@ fun SellModal(
             pendingCameraUri?.let { uri ->
                 if (localUris.size + remoteUrls.size < MediaUploadPolicy.MAX_PRODUCT_IMAGES_PER_LISTING) {
                     localUris.add(uri)
+                    clearErrors()
                 }
             }
         }
@@ -172,281 +193,404 @@ fun SellModal(
 
     val camPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) launchCameraWithUri()
+        else {
+            validationError = if (language == AppLanguage.AR) {
+                "يرجى منح إذن الكاميرا لالتقاط صورة."
+            } else {
+                "Camera permission is required to capture a photo."
+            }
+        }
     }
 
     val signerReady = BuildConfig.MEDIA_SIGNER_URL.startsWith("https://")
+    val displayedError = publishErrorMessage?.takeIf { it.isNotBlank() }
+        ?: validationError?.takeIf { it.isNotBlank() }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
-    ) {
-        Surface(color = HatchBgDark, modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.fillMaxSize()) {
+    BackHandler(enabled = !isSubmitting) {
+        onClearPublishError()
+        onDismiss()
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(HatchBgDark)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {}
+                )
+        )
+
+        Scaffold(
+            containerColor = HatchBgDark,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            topBar = {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
                         .background(HatchSurfaceDark)
+                        .statusBarsPadding()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    IconButton(onClick = onDismiss) {
+                    IconButton(
+                        onClick = {
+                            onClearPublishError()
+                            onDismiss()
+                        },
+                        enabled = !isSubmitting
+                    ) {
                         Icon(Icons.Rounded.Close, contentDescription = "Close", tint = HatchTextPrimary)
                     }
                     Text(strings.postAdTitle, color = HatchAmber400, fontSize = 17.sp, fontWeight = FontWeight.Black)
                     Spacer(modifier = Modifier.width(40.dp))
                 }
-
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    val publisherType = currentUser?.resolvedAccountType() ?: AccountType.PERSONAL
-                    if (currentUser != null && publisherType.isCommercial()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(HatchSurfaceDark)
-                                .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            val logoUrl = currentUser.displayLogoOrAvatar()
-                            if (logoUrl.isNotBlank()) {
-                                AsyncImage(
-                                    model = logoUrl,
-                                    contentDescription = currentUser.name,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (publisherType == AccountType.COMPANY) Icons.Rounded.Business else Icons.Rounded.Storefront,
-                                    contentDescription = null,
-                                    tint = HatchAmber400,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${if (language == AppLanguage.AR) "النشر باسم" else "Publishing as"} ${strings.accountTypeLabel(publisherType.wireValue)}: ${currentUser.name}",
-                                    color = HatchAmber400,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                currentUser.businessActivity?.takeIf { it.isNotBlank() }?.let { act ->
-                                    Text(text = act, color = HatchTextMuted, fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    }
-
-                    // Photos Section
-                    Text(
-                        text = if (language == AppLanguage.AR) "صور المنتج (حد أقصى 5 صور — تُضغط تلقائياً إلى WebP)" else "Product Photos (max 5 — compressed to WebP)",
-                        color = HatchTextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (!signerReady) {
-                        Text(
-                            text = if (language == AppLanguage.AR) "ملاحظة: رفع صور الهاتف مباشرة يتطلب تفعيل MEDIA_SIGNER_URL، أو يمكنك إضافة روابط HTTPS مباشرة للصور." else "Note: Device photo upload requires MEDIA_SIGNER_URL, or paste direct HTTPS image URLs.",
-                            color = HatchAmber400,
-                            fontSize = 11.sp
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { galleryLauncher.launch("image/*") },
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(strings.galleryPick, color = HatchAmber400, fontSize = 11.sp)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                val hasCam = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                                    PackageManager.PERMISSION_GRANTED
-                                if (hasCam) launchCameraWithUri() else camPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Rounded.CameraAlt, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(strings.cameraCapture, color = HatchEmerald400, fontSize = 11.sp)
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = urlInput,
-                            onValueChange = { urlInput = it },
-                            placeholder = { Text("https://.../image.webp", color = HatchTextMuted, fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(16.dp)) },
-                            singleLine = true,
-                            colors = hatchInputColors(),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Button(
-                            onClick = {
-                                val clean = urlInput.trim()
-                                if (clean.startsWith("https://") && localUris.size + remoteUrls.size < 5) {
-                                    remoteUrls.add(clean)
-                                    urlInput = ""
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = HatchCardElevated, contentColor = HatchAmber400),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("+", fontWeight = FontWeight.Black)
-                        }
-                    }
-
-                    if (localUris.isNotEmpty() || remoteUrls.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            localUris.forEachIndexed { idx, uri ->
-                                PhotoPreviewThumb(model = uri) { localUris.removeAt(idx) }
-                            }
-                            remoteUrls.forEachIndexed { idx, url ->
-                                PhotoPreviewThumb(model = url) { remoteUrls.removeAt(idx) }
-                            }
-                        }
-                    }
-
-                    HatchField(
-                        value = titleAr,
-                        onValueChange = { titleAr = it },
-                        label = if (language == AppLanguage.AR) "عنوان الإعلان *" else "Listing Title *"
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        HatchField(
-                            value = priceText,
-                            onValueChange = { priceText = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                            label = if (language == AppLanguage.AR) "السعر (ج.س) *" else "Price (SDG) *",
-                            keyboardType = KeyboardType.Number,
-                            modifier = Modifier.weight(1f)
-                        )
-                        HatchField(
-                            value = originalPriceText,
-                            onValueChange = { originalPriceText = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                            label = if (language == AppLanguage.AR) "السعر السابق (اختياري)" else "Original Price (Opt)",
-                            keyboardType = KeyboardType.Number,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Text(if (language == AppLanguage.AR) "القسم" else "Category", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CategoryId.entries.forEach { cat ->
-                            SelectablePill(strings.categoryLabel(cat.wireValue), category == cat.wireValue) { category = cat.wireValue }
-                        }
-                    }
-
-                    Text(strings.conditionLabel, color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        ProductCondition.entries.forEach { cond ->
-                            SelectablePill(strings.conditionLabel(cond.wireValue), condition == cond.wireValue) { condition = cond.wireValue }
-                        }
-                    }
-
-                    Text(if (language == AppLanguage.AR) "المدينة" else "City", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        SudaneseCities.ALL.forEach { c ->
-                            SelectablePill(c.substringBefore(" ("), city == c) { city = c }
-                        }
-                    }
-
-                    HatchField(
-                        value = areaAr,
-                        onValueChange = { areaAr = it },
-                        label = if (language == AppLanguage.AR) "الحي / المنطقة (مثلاً: الرياض / أركويت)" else "Neighborhood / Area"
-                    )
-
-                    Text(if (language == AppLanguage.AR) "طرق الدفع المقبولة *" else "Accepted Payment Methods *", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        PaymentMethod.entries.forEach { pm ->
-                            val selected = selectedPayments.contains(pm.wireValue)
-                            SelectablePill(strings.paymentLabel(pm.wireValue), selected) {
-                                if (selected && selectedPayments.size > 1) selectedPayments.remove(pm.wireValue)
-                                else if (!selected) selectedPayments.add(pm.wireValue)
-                            }
-                        }
-                    }
-
-                    HatchSwitchRow(strings.negotiableBadge, negotiable) { negotiable = it }
-                    HatchSwitchRow(strings.deliveryBadge, deliveryAvailable) { deliveryAvailable = it }
-                    HatchSwitchRow(strings.urgentBadge, urgentSale) { urgentSale = it }
-
-                    HatchField(
-                        value = descriptionAr,
-                        onValueChange = { descriptionAr = it },
-                        label = if (language == AppLanguage.AR) "الوصف الكامل وحالة السلعة (5 أحرف فأكثر) *" else "Full Description (min 5 chars) *",
-                        singleLine = false,
-                        minLines = 3
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
-
-                Box(
+            },
+            bottomBar = {
+                Surface(
+                    color = HatchSurfaceDark,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(HatchSurfaceDark)
-                        .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
-                        .padding(16.dp)
+                        .border(width = 0.5.dp, color = HatchBorderDark)
                 ) {
-                    val priceVal = priceText.toDoubleOrNull() ?: 0.0
-                    val canSubmit = !isSubmitting && titleAr.trim().length >= 2 &&
-                        descriptionAr.trim().length >= 5 && priceVal > 0 &&
-                        (localUris.isNotEmpty() || remoteUrls.isNotEmpty())
-                    Button(
-                        onClick = {
-                            onPublish(
-                                titleAr,
-                                titleAr,
-                                descriptionAr,
-                                descriptionAr,
-                                priceVal,
-                                originalPriceText.toDoubleOrNull(),
-                                category,
-                                condition,
-                                city,
-                                areaAr,
-                                localUris.toList(),
-                                remoteUrls.toList(),
-                                selectedPayments.toList(),
-                                negotiable,
-                                deliveryAvailable,
-                                urgentSale
-                            )
-                        },
-                        enabled = canSubmit,
-                        colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().height(50.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (isSubmitting) {
-                            CircularProgressIndicator(color = HatchBgDark, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Text(strings.postAdTitle, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                        if (!displayedError.isNullOrBlank()) {
+                            Text(
+                                text = displayedError,
+                                color = HatchRose500,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(HatchRose500.copy(alpha = 0.14f))
+                                    .border(1.dp, HatchRose500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                    .padding(10.dp)
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val check = ListingPublishValidator.validateDraft(
+                                    title = titleAr,
+                                    description = descriptionAr,
+                                    priceText = priceText,
+                                    originalPriceText = originalPriceText,
+                                    city = city,
+                                    localImageCount = localUris.size,
+                                    remoteUrls = remoteUrls.toList(),
+                                    pendingUrlInput = urlInput,
+                                    paymentMethods = selectedPayments.toList(),
+                                    signerReady = signerReady,
+                                    isArabic = language == AppLanguage.AR
+                                )
+                                if (!check.isValid) {
+                                    onClearPublishError()
+                                    validationError = check.errorMessage
+                                    return@Button
+                                }
+                                if (urlInput.trim().isNotEmpty() && check.resolvedRemoteUrls.size > remoteUrls.size) {
+                                    remoteUrls.clear()
+                                    remoteUrls.addAll(check.resolvedRemoteUrls)
+                                    urlInput = ""
+                                    urlError = null
+                                }
+                                clearErrors()
+                                onPublish(
+                                    titleAr.trim(),
+                                    titleAr.trim(),
+                                    descriptionAr.trim(),
+                                    descriptionAr.trim(),
+                                    check.resolvedPrice,
+                                    check.resolvedOriginalPrice,
+                                    category,
+                                    condition,
+                                    city,
+                                    areaAr.trim(),
+                                    localUris.toList(),
+                                    check.resolvedRemoteUrls,
+                                    selectedPayments.toList(),
+                                    negotiable,
+                                    deliveryAvailable,
+                                    urgentSale
+                                )
+                            },
+                            enabled = !isSubmitting,
+                            colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().height(50.dp)
+                        ) {
+                            if (isSubmitting) {
+                                CircularProgressIndicator(color = HatchBgDark, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Text(strings.postAdTitle, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                            }
                         }
                     }
                 }
+            }
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                val publisherType = currentUser?.resolvedAccountType() ?: AccountType.PERSONAL
+                if (currentUser != null && publisherType.isCommercial()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(HatchSurfaceDark)
+                            .border(1.dp, HatchAmber500.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val logoUrl = currentUser.displayLogoOrAvatar()
+                        if (logoUrl.isNotBlank()) {
+                            AsyncImage(
+                                model = logoUrl,
+                                contentDescription = currentUser.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
+                            )
+                        } else {
+                            Icon(
+                                imageVector = if (publisherType == AccountType.COMPANY) Icons.Rounded.Business else Icons.Rounded.Storefront,
+                                contentDescription = null,
+                                tint = HatchAmber400,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${if (language == AppLanguage.AR) "النشر باسم" else "Publishing as"} ${strings.accountTypeLabel(publisherType.wireValue)}: ${currentUser.name}",
+                                color = HatchAmber400,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            currentUser.businessActivity?.takeIf { it.isNotBlank() }?.let { act ->
+                                Text(text = act, color = HatchTextMuted, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+
+                // Photos Section
+                Text(
+                    text = if (language == AppLanguage.AR) "صور المنتج (حد أقصى 5 صور — تُضغط تلقائياً إلى WebP)" else "Product Photos (max 5 — compressed to WebP)",
+                    color = HatchTextSecondary,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                if (!signerReady) {
+                    Text(
+                        text = if (language == AppLanguage.AR) "ملاحظة: رفع صور الهاتف مباشرة يتطلب تفعيل MEDIA_SIGNER_URL، أو يمكنك إضافة روابط HTTPS مباشرة للصور." else "Note: Device photo upload requires MEDIA_SIGNER_URL, or paste direct HTTPS image URLs.",
+                        color = HatchAmber400,
+                        fontSize = 11.sp
+                    )
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { galleryLauncher.launch("image/*") },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.AddPhotoAlternate, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(strings.galleryPick, color = HatchAmber400, fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val hasCam = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                                PackageManager.PERMISSION_GRANTED
+                            if (hasCam) launchCameraWithUri() else camPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.CameraAlt, contentDescription = null, tint = HatchEmerald400, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(strings.cameraCapture, color = HatchEmerald400, fontSize = 11.sp)
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = {
+                            urlInput = it
+                            urlError = null
+                            clearErrors()
+                        },
+                        placeholder = { Text("https://.../image.webp", color = HatchTextMuted, fontSize = 11.sp) },
+                        leadingIcon = { Icon(Icons.Rounded.Link, contentDescription = null, tint = HatchTextMuted, modifier = Modifier.size(16.dp)) },
+                        singleLine = true,
+                        colors = hatchInputColors(),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Button(
+                        onClick = {
+                            when (val check = ListingPublishValidator.validateManualImageUrl(
+                                raw = urlInput,
+                                currentCount = localUris.size + remoteUrls.size,
+                                existingUrls = remoteUrls
+                            )) {
+                                is ImageUrlValidationResult.Valid -> {
+                                    remoteUrls.add(check.normalizedUrl)
+                                    urlInput = ""
+                                    urlError = null
+                                    clearErrors()
+                                }
+                                is ImageUrlValidationResult.Invalid -> {
+                                    val msg = if (language == AppLanguage.AR) check.messageAr else check.messageEn
+                                    urlError = msg
+                                    validationError = msg
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = HatchCardElevated, contentColor = HatchAmber400),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("+", fontWeight = FontWeight.Black)
+                    }
+                }
+                if (!urlError.isNullOrBlank()) {
+                    Text(
+                        text = urlError!!,
+                        color = HatchRose500,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                if (localUris.isNotEmpty() || remoteUrls.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        localUris.forEachIndexed { idx, uri ->
+                            PhotoPreviewThumb(model = uri) {
+                                localUris.removeAt(idx)
+                                clearErrors()
+                            }
+                        }
+                        remoteUrls.forEachIndexed { idx, url ->
+                            PhotoPreviewThumb(model = url) {
+                                remoteUrls.removeAt(idx)
+                                clearErrors()
+                            }
+                        }
+                    }
+                }
+
+                HatchField(
+                    value = titleAr,
+                    onValueChange = {
+                        titleAr = it
+                        clearErrors()
+                    },
+                    label = if (language == AppLanguage.AR) "عنوان الإعلان *" else "Listing Title *"
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    HatchField(
+                        value = priceText,
+                        onValueChange = {
+                            priceText = ListingPublishValidator.normalizeNumericInput(it)
+                            clearErrors()
+                        },
+                        label = if (language == AppLanguage.AR) "السعر (ج.س) *" else "Price (SDG) *",
+                        keyboardType = KeyboardType.Decimal,
+                        modifier = Modifier.weight(1f)
+                    )
+                    HatchField(
+                        value = originalPriceText,
+                        onValueChange = {
+                            originalPriceText = ListingPublishValidator.normalizeNumericInput(it)
+                            clearErrors()
+                        },
+                        label = if (language == AppLanguage.AR) "السعر السابق (اختياري)" else "Original Price (Opt)",
+                        keyboardType = KeyboardType.Decimal,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Text(if (language == AppLanguage.AR) "القسم" else "Category", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CategoryId.entries.forEach { cat ->
+                        SelectablePill(strings.categoryLabel(cat.wireValue), category == cat.wireValue) { category = cat.wireValue }
+                    }
+                }
+
+                Text(strings.conditionLabel, color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ProductCondition.entries.forEach { cond ->
+                        SelectablePill(strings.conditionLabel(cond.wireValue), condition == cond.wireValue) { condition = cond.wireValue }
+                    }
+                }
+
+                Text(if (language == AppLanguage.AR) "المدينة" else "City", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SudaneseCities.ALL.forEach { c ->
+                        SelectablePill(c.substringBefore(" ("), city == c) {
+                            city = c
+                            clearErrors()
+                        }
+                    }
+                }
+
+                HatchField(
+                    value = areaAr,
+                    onValueChange = { areaAr = it },
+                    label = if (language == AppLanguage.AR) "الحي / المنطقة (مثلاً: الرياض / أركويت)" else "Neighborhood / Area"
+                )
+
+                Text(if (language == AppLanguage.AR) "طرق الدفع المقبولة *" else "Accepted Payment Methods *", color = HatchTextSecondary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PaymentMethod.entries.forEach { pm ->
+                        val selected = selectedPayments.contains(pm.wireValue)
+                        SelectablePill(strings.paymentLabel(pm.wireValue), selected) {
+                            if (selected && selectedPayments.size > 1) selectedPayments.remove(pm.wireValue)
+                            else if (!selected) selectedPayments.add(pm.wireValue)
+                            clearErrors()
+                        }
+                    }
+                }
+
+                HatchSwitchRow(strings.negotiableBadge, negotiable) { negotiable = it }
+                HatchSwitchRow(strings.deliveryBadge, deliveryAvailable) { deliveryAvailable = it }
+                HatchSwitchRow(strings.urgentBadge, urgentSale) { urgentSale = it }
+
+                HatchField(
+                    value = descriptionAr,
+                    onValueChange = {
+                        descriptionAr = it
+                        clearErrors()
+                    },
+                    label = if (language == AppLanguage.AR) "الوصف الكامل وحالة السلعة (5 أحرف فأكثر) *" else "Full Description (min 5 chars) *",
+                    singleLine = false,
+                    minLines = 3
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
             }
         }
     }

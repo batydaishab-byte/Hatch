@@ -463,6 +463,22 @@ fun HatchMarketplaceRoot(
                 }
             }
 
+            if (state.showSellModal) {
+                SellModal(
+                    defaultCity = state.currentUser?.city.orEmpty(),
+                    currentUser = state.currentUser,
+                    isSubmitting = state.isSubmitting,
+                    publishErrorMessage = state.sellErrorMessage,
+                    onClearPublishError = { viewModel.clearSellError() },
+                    language = state.language,
+                    strings = strings,
+                    onDismiss = { viewModel.closeSellModal() },
+                    onPublish = { tAr, tEn, dAr, dEn, price, orig, cat, cond, city, area, uris, urls, pm, neg, del, urg ->
+                        viewModel.publishNewProduct(tAr, tEn, dAr, dEn, price, orig, cat, cond, city, area, uris, urls, pm, neg, del, urg)
+                    }
+                )
+            }
+
             ToastHostOverlay(
                 toasts = state.toasts,
                 onDismiss = { viewModel.dismissToast(it) },
@@ -574,20 +590,6 @@ fun HatchMarketplaceRoot(
                 onOpenProduct = { prod ->
                     viewModel.closeCommercialDirectory()
                     viewModel.openProductDetail(prod)
-                }
-            )
-        }
-
-        if (state.showSellModal) {
-            SellModal(
-                defaultCity = state.currentUser?.city.orEmpty(),
-                currentUser = state.currentUser,
-                isSubmitting = state.isSubmitting,
-                language = state.language,
-                strings = strings,
-                onDismiss = { viewModel.closeSellModal() },
-                onPublish = { tAr, tEn, dAr, dEn, price, orig, cat, cond, city, area, uris, urls, pm, neg, del, urg ->
-                    viewModel.publishNewProduct(tAr, tEn, dAr, dEn, price, orig, cat, cond, city, area, uris, urls, pm, neg, del, urg)
                 }
             )
         }

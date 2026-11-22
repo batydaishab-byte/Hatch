@@ -37,6 +37,7 @@ import com.hatch.marketplace.data.repository.AuthRepository
 import com.hatch.marketplace.data.repository.AuthSessionState
 import com.hatch.marketplace.data.repository.ChatRepository
 import com.hatch.marketplace.data.repository.InteractionRepository
+import com.hatch.marketplace.data.repository.ListingPublishRequest
 import com.hatch.marketplace.data.repository.MonetizationRepository
 import com.hatch.marketplace.data.repository.ProductRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -58,6 +59,9 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
@@ -120,6 +124,7 @@ data class HatchUiState(
     val reportRequest: ReportRequest? = null,
     val adminAuditConversation: Conversation? = null,
     val showSellModal: Boolean = false,
+    val sellErrorMessage: String? = null,
     val showAuthSheet: Boolean = false,
     val forceOnboardingStep: Boolean = false,
     val authErrorMessage: String? = null,
@@ -215,7 +220,8 @@ internal data class HatchViewModelStreams(
     val isOnlineFlow: Flow<Boolean> = flowOf(true),
     val fetchAdminQuotaStatus: suspend (Boolean) -> Result<CloudinaryQuotaStatus> = {
         Result.success(CloudinaryQuotaStatus())
-    }
+    },
+    val publishListing: (suspend (ListingPublishRequest) -> Result<String>)? = null
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1006,6 +1012,7 @@ class HatchMainViewModel internal constructor(
                 reportRequest = null,
                 adminAuditConversation = null,
                 showSellModal = false,
+                sellErrorMessage = null,
                 showAuthSheet = false,
                 forceOnboardingStep = false,
                 authErrorMessage = null,
@@ -1101,10 +1108,16 @@ class HatchMainViewModel internal constructor(
 
     fun openSellModal() {
         if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
-        _localState.update { it.copy(showSellModal = true) }
+        _localState.update { it.copy(showSellModal = true, sellErrorMessage = null) }
     }
 
-    fun closeSellModal() { _localState.update { it.copy(showSellModal = false) } }
+    fun closeSellModal() {
+        _localState.update { it.copy(showSellModal = false, sellErrorMessage = null) }
+    }
+
+    fun clearSellError() {
+        _localState.update { it.copy(sellErrorMessage = null) }
+    }
 
     fun publishNewProduct(
         titleAr: String,
@@ -1124,38 +1137,161 @@ class HatchMainViewModel internal constructor(
         deliveryAvailable: Boolean,
         urgentSale: Boolean
     ) {
-        if (!requireActiveUserOrPrompt(GuestPromptReason.SELL)) return
-        val seller = uiState.value.currentUser ?: return
-        val repo = productRepo ?: return
+        if (_localState.value.isSubmitting) return
+
+        val state = uiState.value
+        if (!state.isSignedIn) {
+            val msg = if (isArabic()) {
+                "يرجى تسجيل الدخول بحساب Google أولاً لنشر إعلان."
+            } else {
+                "Please sign in with Google first to publish a listing."
+            }
+            _localState.update { it.copy(sellErrorMessage = msg) }
+            requestGuestPrompt(GuestPromptReason.SELL)
+            return
+        }
+        if (state.isCurrentlySuspended) {
+            val msg = strings().suspendedActionBlocked
+            _localState.update { it.copy(sellErrorMessage = msg) }
+            showToast(msg, ToastType.WARNING)
+            return
+        }
+
+        val seller = state.currentUser ?: run {
+            val msg = if (isArabic()) {
+                "تعذر تحميل بيانات ملفك الشخصي بعد. تأكد من إكمال بيانات حسابك أو انتظر لحظة ثم حاول مجدداً."
+            } else {
+                "Your profile details are not loaded yet. Complete your account setup or wait a moment and try again."
+            }
+            _localState.update { it.copy(sellErrorMessage = msg) }
+            showToast(msg, ToastType.ERROR)
+            return
+        }
+
+        val executor: suspend (ListingPublishRequest) -> Result<String> = streams.publishListing
+            ?: productRepo?.let { repo ->
+                { req ->
+                    repo.createProduct(
+                        seller = req.seller,
+                        titleAr = req.titleAr,
+                        titleEn = req.titleEn,
+                        descriptionAr = req.descriptionAr,
+                        descriptionEn = req.descriptionEn,
+                        price = req.price,
+                        originalPrice = req.originalPrice,
+                        category = req.category,
+                        condition = req.condition,
+                        city = req.city,
+                        areaAr = req.areaAr,
+                        areaEn = req.areaEn,
+                        localImageUris = req.localImageUris,
+                        remoteImageUrls = req.remoteImageUrls,
+                        paymentMethods = req.paymentMethods,
+                        negotiable = req.negotiable,
+                        deliveryAvailable = req.deliveryAvailable,
+                        urgentSale = req.urgentSale
+                    )
+                }
+            }
+            ?: run {
+                val msg = if (isArabic()) {
+                    "خدمة نشر الإعلانات غير متوفرة حالياً."
+                } else {
+                    "Listing publishing service is currently unavailable."
+                }
+                _localState.update { it.copy(sellErrorMessage = msg) }
+                showToast(msg, ToastType.ERROR)
+                return
+            }
+
+        val request = ListingPublishRequest(
+            seller = seller,
+            titleAr = titleAr,
+            titleEn = titleEn,
+            descriptionAr = descriptionAr,
+            descriptionEn = descriptionEn,
+            price = price,
+            originalPrice = originalPrice,
+            category = category,
+            condition = condition,
+            city = city,
+            areaAr = areaAr,
+            areaEn = areaAr,
+            localImageUris = localUris,
+            remoteImageUrls = remoteUrls,
+            paymentMethods = paymentMethods,
+            negotiable = negotiable,
+            deliveryAvailable = deliveryAvailable,
+            urgentSale = urgentSale
+        )
+
+        _localState.update { it.copy(sellErrorMessage = null) }
         viewModelScope.launch {
             setSubmitting(true)
-            repo.createProduct(
-                seller = seller,
-                titleAr = titleAr,
-                titleEn = titleEn,
-                descriptionAr = descriptionAr,
-                descriptionEn = descriptionEn,
-                price = price,
-                originalPrice = originalPrice,
-                category = category,
-                condition = condition,
-                city = city,
-                areaAr = areaAr,
-                areaEn = areaAr,
-                localImageUris = localUris,
-                remoteImageUrls = remoteUrls,
-                paymentMethods = paymentMethods,
-                negotiable = negotiable,
-                deliveryAvailable = deliveryAvailable,
-                urgentSale = urgentSale
-            ).onSuccess {
-                _localState.update { it.copy(showSellModal = false, activeTab = MainTab.BROWSE) }
-                showToast(if (isArabic()) "تم نشر إعلانك بنجاح! 🎉" else "Listing published! 🎉", ToastType.SUCCESS)
-            }.onFailure { e ->
-                showToast(e.localizedMessage ?: "Failed to publish listing", ToastType.ERROR)
+            try {
+                executor(request)
+                    .onSuccess {
+                        _localState.update {
+                            it.copy(
+                                showSellModal = false,
+                                sellErrorMessage = null,
+                                activeTab = MainTab.BROWSE
+                            )
+                        }
+                        showToast(
+                            if (isArabic()) "تم نشر إعلانك بنجاح! 🎉" else "Listing published! 🎉",
+                            ToastType.SUCCESS
+                        )
+                    }
+                    .onFailure { e ->
+                        val msg = formatListingPublishError(e)
+                        _localState.update { it.copy(sellErrorMessage = msg) }
+                        showToast(msg, ToastType.ERROR)
+                    }
+            } catch (t: Throwable) {
+                val msg = formatListingPublishError(t)
+                _localState.update { it.copy(sellErrorMessage = msg) }
+                showToast(msg, ToastType.ERROR)
+            } finally {
+                setSubmitting(false)
             }
-            setSubmitting(false)
         }
+    }
+
+    private fun formatListingPublishError(error: Throwable): String {
+        val raw = error.localizedMessage?.trim().orEmpty()
+        val fsCode = (error as? FirebaseFirestoreException)?.code
+        if (fsCode == FirebaseFirestoreException.Code.PERMISSION_DENIED ||
+            raw.contains("PERMISSION_DENIED", ignoreCase = true)
+        ) {
+            return if (isArabic()) {
+                "رفض الخادم نشر الإعلان (تحقق من تسجيل الدخول، حالة الحساب، وصحة بيانات وصور الإعلان)."
+            } else {
+                "Server rejected publishing (verify sign-in, account status, and valid listing details/images)."
+            }
+        }
+        if (fsCode == FirebaseFirestoreException.Code.UNAVAILABLE ||
+            error is UnknownHostException ||
+            error is SocketTimeoutException ||
+            error is IOException ||
+            raw.contains("network", ignoreCase = true) ||
+            raw.contains("Unable to resolve host", ignoreCase = true)
+        ) {
+            return if (isArabic()) {
+                "تعذر الاتصال بالخادم. تحقق من اتصال الإنترنت وحاول مرة أخرى."
+            } else {
+                "Network connection failed. Check your internet connection and try again."
+            }
+        }
+        if (raw.contains("MEDIA_SIGNER_URL", ignoreCase = true)) {
+            return if (isArabic()) {
+                "رفع صور الهاتف غير مفعّل حالياً (يتطلب MEDIA_SIGNER_URL). يمكنك إزالة صور الهاتف واستخدام رابط https://."
+            } else {
+                "Device image upload requires MEDIA_SIGNER_URL. Remove local photos and use an https:// link instead."
+            }
+        }
+        if (raw.isNotBlank()) return raw
+        return if (isArabic()) "تعذر نشر الإعلان، يرجى المحاولة مرة أخرى." else "Failed to publish listing. Please try again."
     }
 
     fun openEditProduct(product: Product) {
