@@ -1260,8 +1260,8 @@ class HatchMainViewModel internal constructor(
 
     private fun formatListingPublishError(error: Throwable): String {
         val raw = error.localizedMessage?.trim().orEmpty()
-        val fsCode = (error as? FirebaseFirestoreException)?.code
-        if (fsCode == FirebaseFirestoreException.Code.PERMISSION_DENIED ||
+        val fsCodeName = if (error is FirebaseFirestoreException) error.code.name else null
+        if (fsCodeName == "PERMISSION_DENIED" ||
             raw.contains("PERMISSION_DENIED", ignoreCase = true)
         ) {
             return if (isArabic()) {
@@ -1270,7 +1270,8 @@ class HatchMainViewModel internal constructor(
                 "Server rejected publishing (verify sign-in, account status, and valid listing details/images)."
             }
         }
-        if (fsCode == FirebaseFirestoreException.Code.UNAVAILABLE ||
+        if (fsCodeName == "UNAVAILABLE" ||
+            fsCodeName == "DEADLINE_EXCEEDED" ||
             error is UnknownHostException ||
             error is SocketTimeoutException ||
             error is IOException ||
