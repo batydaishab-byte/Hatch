@@ -146,6 +146,7 @@ class HatchMainViewModelSessionTest {
         try {
             harness.gateway.setUserClaims("u1", cachedAdmin = false, serverAdmin = false)
             harness.gateway.emitAuthState(AuthUserIdentity(uid = "u1", isEmailVerified = true))
+            runCurrent()
             advanceUntilIdle()
 
             // Single upstream Auth/IdToken/Doc subscription despite 14+ ViewModel consumers
@@ -167,6 +168,7 @@ class HatchMainViewModelSessionTest {
                 privateUser = PrivateUser(uid = "u1", rewardCredits = 2),
                 emitPrivate = true
             )
+            runCurrent()
             advanceUntilIdle()
             assertEquals("سارة", harness.viewModel.uiState.value.currentUser?.name)
             assertEquals(2, harness.viewModel.uiState.value.auth.privateProfile?.rewardCredits)
@@ -178,6 +180,7 @@ class HatchMainViewModelSessionTest {
                 privateUser = PrivateUser(uid = "u1", rewardCredits = 10),
                 emitPrivate = true
             )
+            runCurrent()
             advanceUntilIdle()
             assertEquals("بورتسودان", harness.viewModel.uiState.value.currentUser?.city)
             assertEquals(productsCallsAfterSignIn, harness.productsObserveCalls)
@@ -191,6 +194,7 @@ class HatchMainViewModelSessionTest {
 
             // Unsubscribing UI keeps listeners warm within 5s grace period, then detaches them even while ViewModel lives
             uiJob.cancel()
+            runCurrent()
             advanceTimeBy(4_000L)
             runCurrent()
             assertEquals(1, harness.gateway.activeAuthListenerCount)
