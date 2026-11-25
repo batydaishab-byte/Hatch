@@ -39,6 +39,7 @@ import com.hatch.marketplace.data.repository.ChatRepository
 import com.hatch.marketplace.data.repository.InteractionRepository
 import com.hatch.marketplace.data.repository.ListingPublishRequest
 import com.hatch.marketplace.data.repository.MonetizationRepository
+import com.hatch.marketplace.data.repository.ProductPageResult
 import com.hatch.marketplace.data.repository.ProductRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -110,6 +111,9 @@ data class HatchUiState(
     val cloudinaryQuota: CloudinaryQuotaStatus = CloudinaryQuotaStatus(),
     val filter: MarketFilterState = MarketFilterState(),
     val searchHistory: List<String> = emptyList(),
+    val productsLimit: Int = ProductRepository.PAGE_SIZE,
+    val isLoadingMore: Boolean = false,
+    val hasMoreProducts: Boolean = true,
     val isRefreshing: Boolean = false,
     val isSubmitting: Boolean = false,
     val toasts: List<UiToast> = emptyList(),
@@ -202,6 +206,7 @@ data class HatchUiState(
 
 internal data class HatchViewModelStreams(
     val observeProducts: (String?, Boolean) -> Flow<List<Product>> = { _, _ -> flowOf(emptyList()) },
+    val observeProductsPage: ((String?, Boolean, Int) -> Flow<ProductPageResult>)? = null,
     val observeFavoriteIds: (String?) -> Flow<Set<String>> = { _ -> flowOf(emptySet()) },
     val observeConversations: (String?, Boolean) -> Flow<List<Conversation>> = { _, _ -> flowOf(emptyList()) },
     val observeMessages: (String?) -> Flow<List<ChatMessage>> = { _ -> flowOf(emptyList()) },
@@ -254,6 +259,7 @@ class HatchMainViewModel internal constructor(
         prefs = prefs,
         streams = HatchViewModelStreams(
             observeProducts = productRepo::observeProducts,
+            observeProductsPage = productRepo::observeProductsPaged,
             observeFavoriteIds = interactionRepo::observeFavoriteIds,
             observeConversations = chatRepo::observeConversations,
             observeMessages = chatRepo::observeMessages,
@@ -276,9 +282,12 @@ class HatchMainViewModel internal constructor(
 
     private val _localState = MutableStateFlow(HatchUiState())
     private val _activeConversationId = MutableStateFlow<String?>(null)
+    private val _productsLimit = MutableStateFlow(ProductRepository.PAGE_SIZE)
     private val _systemLanguage = MutableStateFlow(
         if (Locale.getDefault().language.equals("ar", ignoreCase = true)) AppLanguage.AR else AppLanguage.EN
     )
+    private var lastRequestedProductsLimit = ProductRepository.PAGE_SIZE
+    private var searchDebounceJob: Job? = null
     private var productViewsBeforeAd = 0
     private var lastObservedSessionUid: String? = null
     private var lastObservedIsAdmin: Boolean = false
@@ -304,11 +313,36 @@ class HatchMainViewModel internal constructor(
             replay = 1
         )
 
-    private val productsFlow = authSessionFlow
-        .map { it.uid to it.hasAdminClaim }
+    private val productsFlow: Flow<ProductPageResult> = combine(
+        authSessionFlow.map { it.uid to it.hasAdminClaim }.distinctUntilChanged(),
+        _productsLimit
+    ) { sessionKey, limit ->
+        sessionKey to limit
+    }
         .distinctUntilChanged()
-        .flatMapLatest { (uid, hasAdminClaim) ->
-            streams.observeProducts(uid, hasAdminClaim)
+        .flatMapLatest { (sessionKey, limit) ->
+            val (uid, hasAdminClaim) = sessionKey
+            val pagedProvider = streams.observeProductsPage
+            val upstream = if (pagedProvider != null) {
+                pagedProvider(uid, hasAdminClaim, limit)
+            } else {
+                streams.observeProducts(uid, hasAdminClaim).map { list ->
+                    ProductPageResult(
+                        products = list,
+                        hasMore = false,
+                        requestedLimit = limit
+                    )
+                }
+            }
+            upstream.onEach { page ->
+                _localState.update { state ->
+                    if (state.isLoadingMore && page.requestedLimit >= lastRequestedProductsLimit) {
+                        state.copy(isLoadingMore = false)
+                    } else {
+                        state
+                    }
+                }
+            }
         }
 
     private val favoritesFlow = authSessionFlow
@@ -389,7 +423,7 @@ class HatchMainViewModel internal constructor(
 
     private data class CoreStreams(
         val auth: AuthSessionState,
-        val products: List<Product>,
+        val productsPage: ProductPageResult,
         val favorites: Set<String>,
         val conversations: List<Conversation>,
         val activeMessages: List<ChatMessage>
@@ -423,8 +457,8 @@ class HatchMainViewModel internal constructor(
         favoritesFlow,
         conversationsFlow,
         activeMessagesFlow
-    ) { auth, products, favs, convs, msgs ->
-        CoreStreams(auth, products, favs, convs, msgs)
+    ) { auth, productsPage, favs, convs, msgs ->
+        CoreStreams(auth, productsPage, favs, convs, msgs)
     }
 
     private val usersCombinedFlow = combine(
@@ -489,7 +523,7 @@ class HatchMainViewModel internal constructor(
         )
         val reviewsBySeller = meta.reviews.groupBy { it.sellerId }
         val usersById = mergedDirectoryUsers.associateBy { it.uid }
-        val enrichedProducts = core.products.map { p ->
+        val enrichedProducts = core.productsPage.products.map { p ->
             val sellerReviews = reviewsBySeller[p.sellerId].orEmpty()
             val liveSeller = usersById[p.sellerId]
             val avgRating = if (sellerReviews.isNotEmpty()) {
@@ -524,6 +558,8 @@ class HatchMainViewModel internal constructor(
             firebaseConnected = core.auth.isFirebaseConnected,
             auth = core.auth,
             products = enrichedProducts,
+            productsLimit = core.productsPage.requestedLimit,
+            hasMoreProducts = core.productsPage.hasMore,
             favoriteIds = core.favorites,
             conversations = core.conversations,
             activeMessages = core.activeMessages,
@@ -710,7 +746,43 @@ class HatchMainViewModel internal constructor(
     }
 
     fun updateFilter(transform: (MarketFilterState) -> MarketFilterState) {
-        _localState.update { it.copy(filter = transform(it.filter)) }
+        _localState.update { state ->
+            val nextFilter = transform(state.filter)
+            if (nextFilter.searchQuery != state.filter.searchQuery) {
+                searchDebounceJob?.cancel()
+                searchDebounceJob = null
+            }
+            state.copy(filter = nextFilter)
+        }
+    }
+
+    fun updateSearchQuery(query: String, immediate: Boolean = false) {
+        searchDebounceJob?.cancel()
+        searchDebounceJob = null
+        if (immediate) {
+            _localState.update { state ->
+                if (state.filter.searchQuery == query) state
+                else state.copy(filter = state.filter.copy(searchQuery = query))
+            }
+            return
+        }
+        searchDebounceJob = viewModelScope.launch {
+            delay(SEARCH_DEBOUNCE_MS)
+            _localState.update { state ->
+                if (state.filter.searchQuery == query) state
+                else state.copy(filter = state.filter.copy(searchQuery = query))
+            }
+        }
+    }
+
+    fun loadMoreProducts() {
+        val current = uiState.value
+        if (current.isLoadingMore || !current.hasMoreProducts) return
+        if (streams.observeProductsPage == null) return
+        val nextLimit = lastRequestedProductsLimit + ProductRepository.PAGE_SIZE
+        lastRequestedProductsLimit = nextLimit
+        _localState.update { it.copy(isLoadingMore = true, productsLimit = nextLimit) }
+        _productsLimit.value = nextLimit
     }
 
     fun commitSearchToHistory(query: String) {
@@ -988,6 +1060,10 @@ class HatchMainViewModel internal constructor(
 
     private fun clearUserScopedState() {
         _activeConversationId.value = null
+        searchDebounceJob?.cancel()
+        searchDebounceJob = null
+        lastRequestedProductsLimit = ProductRepository.PAGE_SIZE
+        _productsLimit.value = ProductRepository.PAGE_SIZE
         productViewsBeforeAd = 0
         _localState.update {
             it.copy(
@@ -998,6 +1074,9 @@ class HatchMainViewModel internal constructor(
                 activeConversationId = null,
                 readBroadcastIds = emptySet(),
                 cloudinaryQuota = CloudinaryQuotaStatus(),
+                productsLimit = ProductRepository.PAGE_SIZE,
+                isLoadingMore = false,
+                hasMoreProducts = true,
                 isRefreshing = false,
                 isSubmitting = false,
                 toasts = emptyList(),
@@ -2026,4 +2105,8 @@ class HatchMainViewModel internal constructor(
     private fun setSubmitting(value: Boolean) { _localState.update { it.copy(isSubmitting = value) } }
     private fun isArabic(): Boolean = uiState.value.language == AppLanguage.AR
     private fun strings() = com.hatch.marketplace.ui.i18n.HatchStrings.forLanguage(uiState.value.language)
+
+    companion object {
+        internal const val SEARCH_DEBOUNCE_MS = 450L
+    }
 }

@@ -166,7 +166,10 @@ data class HatchStrings(
     val verificationRejectedLabel: String,
     val verificationNoteLabel: String,
     val verificationDocUrlLabel: String,
-    val submitVerificationBtn: String
+    val submitVerificationBtn: String,
+    val loadingMoreListings: String,
+    val noMoreListings: String,
+    val loadOlderListings: String
 ) {
     fun guestPromptMessage(reason: GuestPromptReason): String = when (reason) {
         GuestPromptReason.CONTACT_OR_BUY -> guestPromptContactOrBuy
@@ -514,7 +517,10 @@ data class HatchStrings(
             verificationRejectedLabel = "تم رفض الطلب السابق — يمكنك التقديم مجدداً",
             verificationNoteLabel = "ملاحظات طلب التوثيق (5 أحرف فأكثر) *",
             verificationDocUrlLabel = "رابط إثبات النشاط أو المستند HTTPS (اختياري)",
-            submitVerificationBtn = "إرسال طلب التوثيق"
+            submitVerificationBtn = "إرسال طلب التوثيق",
+            loadingMoreListings = "جارٍ تحميل المزيد من الإعلانات...",
+            noMoreListings = "تم عرض جميع الإعلانات المتاحة",
+            loadOlderListings = "البحث في إعلانات أقدم (+20)"
         )
 
         private val English = HatchStrings(
@@ -644,7 +650,10 @@ data class HatchStrings(
             verificationRejectedLabel = "Previous request declined — submit an update",
             verificationNoteLabel = "Verification details / business note (min 5 chars) *",
             verificationDocUrlLabel = "Optional verification document HTTPS URL",
-            submitVerificationBtn = "Submit Verification Request"
+            submitVerificationBtn = "Submit Verification Request",
+            loadingMoreListings = "Loading more listings...",
+            noMoreListings = "You've reached the end of available listings",
+            loadOlderListings = "Load 20 older listings"
         )
     }
 }

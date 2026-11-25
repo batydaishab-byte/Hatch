@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -131,10 +133,13 @@ fun SwipeDeckScreen(
     selectedCity: String,
     canUndo: Boolean,
     isRefreshing: Boolean,
+    hasMore: Boolean = false,
+    isLoadingMore: Boolean = false,
     language: AppLanguage,
     strings: HatchStrings,
     onSelectCity: (String) -> Unit,
     onRefresh: () -> Unit,
+    onLoadMore: () -> Unit = {},
     onBrowseNext: (Product) -> Unit,
     onBrowsePrevious: () -> Unit,
     onSwipeUpOffer: (Product) -> Unit,
@@ -143,6 +148,13 @@ fun SwipeDeckScreen(
     onResetDeck: () -> Unit,
     onGoToBrowse: () -> Unit
 ) {
+    val topProductId = products.firstOrNull()?.id
+    LaunchedEffect(topProductId, products.size, selectedCity) {
+        if (products.size in 1..3 && hasMore && !isLoadingMore) {
+            onLoadMore()
+        }
+    }
+
     PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = onRefresh,
@@ -182,13 +194,25 @@ fun SwipeDeckScreen(
                     }
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "${products.size} ${if (language == AppLanguage.AR) "عرض" else "left"}",
-                    color = HatchTextMuted,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    if (isLoadingMore) {
+                        CircularProgressIndicator(
+                            color = HatchAmber400,
+                            strokeWidth = 1.5.dp,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                    Text(
+                        text = "${products.size} ${if (language == AppLanguage.AR) "عرض" else "left"}",
+                        color = HatchTextMuted,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             if (products.isEmpty()) {
@@ -220,6 +244,28 @@ fun SwipeDeckScreen(
                         }
                         Text(strings.swipeEmptyTitle, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                         Text(strings.swipeEmptySubtitle, color = HatchTextMuted, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        if (isLoadingMore) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    color = HatchAmber400,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(strings.loadingMoreListings, color = HatchTextMuted, fontSize = 12.sp)
+                            }
+                        } else if (hasMore) {
+                            Button(
+                                onClick = onLoadMore,
+                                colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(strings.loadOlderListings, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()

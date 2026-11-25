@@ -2,7 +2,11 @@ package com.hatch.marketplace.data.repository
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import com.hatch.marketplace.BuildConfig
 import com.hatch.marketplace.data.media.CloudinaryMediaService
 import com.hatch.marketplace.data.media.ImageWebPCompressor
@@ -18,6 +22,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.net.URI
 import java.util.UUID
@@ -319,41 +324,112 @@ object ListingPublishValidator {
     }
 }
 
+data class ProductPageResult(
+    val products: List<Product> = emptyList(),
+    val hasMore: Boolean = false,
+    val requestedLimit: Int = ProductRepository.PAGE_SIZE
+)
+
 @Singleton
 class ProductRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val clients: FirebaseClientsHolder,
     private val cloudinaryService: CloudinaryMediaService
 ) {
-    fun observeProducts(currentUserId: String?, hasAdminClaim: Boolean): Flow<List<Product>> = callbackFlow {
+    companion object {
+        const val PAGE_SIZE = 20
+        private const val TAG = "ProductRepository"
+    }
+
+    fun observeProducts(currentUserId: String?, hasAdminClaim: Boolean): Flow<List<Product>> =
+        observeProductsPaged(currentUserId, hasAdminClaim, PAGE_SIZE).map { it.products }
+
+    fun observeProductsPaged(
+        currentUserId: String?,
+        hasAdminClaim: Boolean,
+        limit: Int = PAGE_SIZE
+    ): Flow<ProductPageResult> = callbackFlow {
+        val safeLimit = limit.coerceAtLeast(PAGE_SIZE)
         val db = clients.firestore
         if (db == null) {
-            trySend(emptyList())
+            trySend(ProductPageResult(products = emptyList(), hasMore = false, requestedLimit = safeLimit))
             close()
             return@callbackFlow
         }
 
         val mergedMap = linkedMapOf<String, Product>()
+        var closed = false
+        var adminHasMore = false
+        var activeSoldLoaded = false
+        var activeSoldHasMore = false
+
+        var adminReg: ListenerRegistration? = null
+        var activeSoldReg: ListenerRegistration? = null
+        var myAdsReg: ListenerRegistration? = null
+
         fun emitSorted() {
+            if (closed) return
             val sorted = mergedMap.values.sortedByDescending { it.createdAt?.seconds ?: 0L }
-            trySend(sorted)
+            val hasMore = if (hasAdminClaim) adminHasMore else if (activeSoldLoaded) activeSoldHasMore else true
+            trySend(
+                ProductPageResult(
+                    products = sorted,
+                    hasMore = hasMore,
+                    requestedLimit = safeLimit
+                )
+            )
         }
 
-        if (hasAdminClaim) {
-            val reg = db.collection("products").addSnapshotListener { snap, _ ->
+        fun attachAdminListener(orderedByCreatedAt: Boolean) {
+            if (closed) return
+            adminReg?.remove()
+            val query: Query = if (orderedByCreatedAt) {
+                db.collection("products")
+                    .orderBy("createdAt", Query.Direction.DESCENDING)
+                    .limit(safeLimit.toLong())
+            } else {
+                db.collection("products")
+                    .limit(safeLimit.toLong())
+            }
+            adminReg = query.addSnapshotListener { snap, error ->
+                if (error != null) {
+                    if (orderedByCreatedAt && error.code == FirebaseFirestoreException.Code.FAILED_PRECONDITION && !closed) {
+                        Log.w(TAG, "Admin products query missing index; falling back to unordered limit($safeLimit)")
+                        attachAdminListener(orderedByCreatedAt = false)
+                    } else {
+                        Log.w(TAG, "Admin products listener error: ${error.code}")
+                    }
+                    return@addSnapshotListener
+                }
                 mergedMap.clear()
                 snap?.documents?.forEach { doc ->
                     doc.toObject(Product::class.java)?.copy(id = doc.id)?.let { mergedMap[it.id] = it }
                 }
+                adminHasMore = (snap?.size() ?: 0) >= safeLimit
                 emitSorted()
             }
-            awaitClose { reg.remove() }
-            return@callbackFlow
         }
 
-        val activeSoldReg = db.collection("products")
-            .whereIn("status", listOf(ProductStatus.ACTIVE.wireValue, ProductStatus.SOLD.wireValue))
-            .addSnapshotListener { snap, _ ->
+        fun attachActiveSoldListener(orderedByCreatedAt: Boolean) {
+            if (closed) return
+            activeSoldReg?.remove()
+            val baseQuery = db.collection("products")
+                .whereIn("status", listOf(ProductStatus.ACTIVE.wireValue, ProductStatus.SOLD.wireValue))
+            val query: Query = if (orderedByCreatedAt) {
+                baseQuery.orderBy("createdAt", Query.Direction.DESCENDING).limit(safeLimit.toLong())
+            } else {
+                baseQuery.limit(safeLimit.toLong())
+            }
+            activeSoldReg = query.addSnapshotListener { snap, error ->
+                if (error != null) {
+                    if (orderedByCreatedAt && error.code == FirebaseFirestoreException.Code.FAILED_PRECONDITION && !closed) {
+                        Log.w(TAG, "Active/sold products query missing composite index; falling back to unordered limit($safeLimit)")
+                        attachActiveSoldListener(orderedByCreatedAt = false)
+                    } else {
+                        Log.w(TAG, "Active/sold products listener error: ${error.code}")
+                    }
+                    return@addSnapshotListener
+                }
                 val activeSoldIds = mutableSetOf<String>()
                 snap?.documents?.forEach { doc ->
                     doc.toObject(Product::class.java)?.copy(id = doc.id)?.let { item ->
@@ -369,24 +445,58 @@ class ProductRepository @Inject constructor(
                         iterator.remove()
                     }
                 }
+                activeSoldLoaded = true
+                activeSoldHasMore = (snap?.size() ?: 0) >= safeLimit
                 emitSorted()
             }
+        }
 
-        val myAdsReg = if (!currentUserId.isNullOrBlank()) {
-            db.collection("products")
-                .whereEqualTo("sellerId", currentUserId)
-                .addSnapshotListener { snap, _ ->
-                    snap?.documents?.forEach { doc ->
-                        doc.toObject(Product::class.java)?.copy(id = doc.id)?.let {
-                            mergedMap[it.id] = it
-                        }
+        fun attachMyAdsListener(sellerUid: String, orderedByCreatedAt: Boolean) {
+            if (closed) return
+            myAdsReg?.remove()
+            val baseQuery = db.collection("products")
+                .whereEqualTo("sellerId", sellerUid)
+            val query: Query = if (orderedByCreatedAt) {
+                baseQuery.orderBy("createdAt", Query.Direction.DESCENDING).limit(safeLimit.toLong())
+            } else {
+                baseQuery.limit(safeLimit.toLong())
+            }
+            myAdsReg = query.addSnapshotListener { snap, error ->
+                if (error != null) {
+                    if (orderedByCreatedAt && error.code == FirebaseFirestoreException.Code.FAILED_PRECONDITION && !closed) {
+                        Log.w(TAG, "Seller products query missing composite index; falling back to unordered limit($safeLimit)")
+                        attachMyAdsListener(sellerUid, orderedByCreatedAt = false)
+                    } else {
+                        Log.w(TAG, "Seller products listener error: ${error.code}")
                     }
-                    emitSorted()
+                    return@addSnapshotListener
                 }
-        } else null
+                snap?.documents?.forEach { doc ->
+                    doc.toObject(Product::class.java)?.copy(id = doc.id)?.let {
+                        mergedMap[it.id] = it
+                    }
+                }
+                emitSorted()
+            }
+        }
+
+        if (hasAdminClaim) {
+            attachAdminListener(orderedByCreatedAt = true)
+            awaitClose {
+                closed = true
+                adminReg?.remove()
+            }
+            return@callbackFlow
+        }
+
+        attachActiveSoldListener(orderedByCreatedAt = true)
+        if (!currentUserId.isNullOrBlank()) {
+            attachMyAdsListener(currentUserId, orderedByCreatedAt = true)
+        }
 
         awaitClose {
-            activeSoldReg.remove()
+            closed = true
+            activeSoldReg?.remove()
             myAdsReg?.remove()
         }
     }

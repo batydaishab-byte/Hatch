@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +41,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,10 +55,14 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,6 +105,8 @@ import com.hatch.marketplace.ui.theme.HatchTextMuted
 import com.hatch.marketplace.ui.theme.HatchTextPrimary
 import com.hatch.marketplace.ui.theme.HatchTextSecondary
 import com.hatch.marketplace.ui.theme.HatchTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,10 +119,14 @@ fun MarketBrowseScreen(
     adConfig: AdMobConfig,
     isSignedIn: Boolean,
     isRefreshing: Boolean,
+    isLoadingMore: Boolean = false,
+    hasMore: Boolean = false,
     language: AppLanguage,
     strings: HatchStrings,
     onRefresh: () -> Unit,
+    onLoadMore: () -> Unit = {},
     onUpdateFilter: ((MarketFilterState) -> MarketFilterState) -> Unit,
+    onSearchQueryChange: ((String, Boolean) -> Unit)? = null,
     onSelectCity: (String) -> Unit,
     onCommitSearch: (String) -> Unit,
     onRemoveSearchHistory: (String) -> Unit,
@@ -130,6 +142,47 @@ fun MarketBrowseScreen(
     var showFilterSheet by remember { mutableStateOf(false) }
     var searchFocused by remember { mutableStateOf(false) }
     var searchInputFocused by remember { mutableStateOf(false) }
+    var searchInput by rememberSaveable { mutableStateOf(filter.searchQuery) }
+    val gridState = rememberLazyGridState()
+
+    val latestHasMore by rememberUpdatedState(hasMore)
+    val latestIsLoadingMore by rememberUpdatedState(isLoadingMore)
+    val latestOnLoadMore by rememberUpdatedState(onLoadMore)
+    val latestSearchQuery by rememberUpdatedState(filter.searchQuery)
+
+    LaunchedEffect(filter.searchQuery) {
+        if (searchInput != filter.searchQuery) {
+            searchInput = filter.searchQuery
+        }
+    }
+
+    LaunchedEffect(searchInput, onSearchQueryChange) {
+        if (onSearchQueryChange == null && searchInput != filter.searchQuery) {
+            delay(450L)
+            onUpdateFilter { it.copy(searchQuery = searchInput) }
+        }
+    }
+
+    LaunchedEffect(gridState) {
+        snapshotFlow {
+            val info = gridState.layoutInfo
+            val total = info.totalItemsCount
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            Triple(lastVisible, total, latestSearchQuery.trim())
+        }
+            .distinctUntilChanged()
+            .collect { (lastVisible, total, _) ->
+                val prefetchThreshold = 4
+                if (
+                    total > 0 &&
+                    lastVisible >= (total - 1 - prefetchThreshold).coerceAtLeast(0) &&
+                    latestHasMore &&
+                    !latestIsLoadingMore
+                ) {
+                    latestOnLoadMore()
+                }
+            }
+    }
 
     val nativeAds = remember(sponsoredAds) {
         sponsoredAds.filter { it.isActive && (it.format == "native" || it.format == "all") }
@@ -176,10 +229,11 @@ fun MarketBrowseScreen(
                     HatchBorderDark
                 }
                 BasicTextField(
-                    value = filter.searchQuery,
+                    value = searchInput,
                     onValueChange = { q ->
-                        onUpdateFilter { it.copy(searchQuery = q) }
+                        searchInput = q
                         searchFocused = true
+                        onSearchQueryChange?.invoke(q, false)
                     },
                     singleLine = true,
                     textStyle = TextStyle(
@@ -189,7 +243,12 @@ fun MarketBrowseScreen(
                     cursorBrush = SolidColor(HatchAmber500),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = {
-                        onCommitSearch(filter.searchQuery)
+                        if (onSearchQueryChange != null) {
+                            onSearchQueryChange(searchInput, true)
+                        } else {
+                            onUpdateFilter { it.copy(searchQuery = searchInput) }
+                        }
+                        onCommitSearch(searchInput)
                         searchFocused = false
                     }),
                     modifier = Modifier
@@ -222,7 +281,7 @@ fun MarketBrowseScreen(
                                 modifier = Modifier.weight(1f),
                                 contentAlignment = Alignment.CenterStart
                             ) {
-                                if (filter.searchQuery.isEmpty()) {
+                                if (searchInput.isEmpty()) {
                                     Text(
                                         text = strings.searchPlaceholder,
                                         color = Color(0xFF737373),
@@ -233,14 +292,21 @@ fun MarketBrowseScreen(
                                 }
                                 innerTextField()
                             }
-                            if (filter.searchQuery.isNotEmpty()) {
+                            if (searchInput.isNotEmpty()) {
                                 Icon(
                                     imageVector = Icons.Rounded.Close,
                                     contentDescription = "Clear",
                                     tint = HatchTextMuted,
                                     modifier = Modifier
                                         .size(16.dp)
-                                        .clickable { onUpdateFilter { it.copy(searchQuery = "") } }
+                                        .clickable {
+                                            searchInput = ""
+                                            if (onSearchQueryChange != null) {
+                                                onSearchQueryChange("", true)
+                                            } else {
+                                                onUpdateFilter { it.copy(searchQuery = "") }
+                                            }
+                                        }
                                 )
                             }
                         }
@@ -309,7 +375,12 @@ fun MarketBrowseScreen(
                                     .clip(RoundedCornerShape(50))
                                     .background(HatchCardElevated)
                                     .clickable {
-                                        onUpdateFilter { it.copy(searchQuery = term) }
+                                        searchInput = term
+                                        if (onSearchQueryChange != null) {
+                                            onSearchQueryChange(term, true)
+                                        } else {
+                                            onUpdateFilter { it.copy(searchQuery = term) }
+                                        }
                                         searchFocused = false
                                     }
                                     .padding(horizontal = 10.dp, vertical = 5.dp)
@@ -389,7 +460,29 @@ fun MarketBrowseScreen(
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center
                         )
+                        if (isLoadingMore) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    color = HatchAmber400,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(strings.loadingMoreListings, color = HatchTextMuted, fontSize = 12.sp)
+                            }
+                        } else if (hasMore) {
+                            Button(
+                                onClick = onLoadMore,
+                                colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(strings.loadOlderListings, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
                         OutlinedButton(onClick = {
+                            searchInput = ""
                             onSelectCity("all")
                             onUpdateFilter { MarketFilterState() }
                         }) {
@@ -399,6 +492,7 @@ fun MarketBrowseScreen(
                 }
             } else {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Fixed(2),
                     contentPadding = PaddingValues(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -422,6 +516,48 @@ fun MarketBrowseScreen(
                             val ad = nativeAds[(idx / 5) % nativeAds.size]
                             item(key = "native_ad_${idx}_${ad.id}", span = { GridItemSpan(2) }) {
                                 AdMobNativeCard(ad, language, strings, onAdImpression, onAdClick)
+                            }
+                        }
+                    }
+
+                    if (isLoadingMore) {
+                        item(key = "pagination_loading", span = { GridItemSpan(2) }) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    color = HatchAmber400,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = strings.loadingMoreListings,
+                                    color = HatchTextMuted,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    } else if (!hasMore) {
+                        item(key = "pagination_end", span = { GridItemSpan(2) }) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = strings.noMoreListings,
+                                    color = HatchTextMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center
+                                )
                             }
                         }
                     }

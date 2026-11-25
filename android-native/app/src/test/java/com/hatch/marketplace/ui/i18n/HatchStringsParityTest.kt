@@ -108,5 +108,8 @@ class HatchStringsParityTest {
         assertTrue(ar.verificationDocUrlLabel.isNotBlank() && en.verificationDocUrlLabel.isNotBlank())
         assertTrue(ar.submitVerificationBtn.isNotBlank() && en.submitVerificationBtn.isNotBlank())
         assertTrue(ar.dealRatedLabel.isNotBlank() && en.dealRatedLabel.isNotBlank())
+        assertTrue(ar.loadingMoreListings.isNotBlank() && en.loadingMoreListings.isNotBlank())
+        assertTrue(ar.noMoreListings.isNotBlank() && en.noMoreListings.isNotBlank())
+        assertTrue(ar.loadOlderListings.isNotBlank() && en.loadOlderListings.isNotBlank())
     }
 }
