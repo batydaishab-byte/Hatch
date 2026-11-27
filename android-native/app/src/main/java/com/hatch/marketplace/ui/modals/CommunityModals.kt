@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.Phone
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
@@ -1142,9 +1143,15 @@ fun UserRatingModal(
     onDismiss: () -> Unit,
     onSubmit: (rating: Int, comment: String, tags: List<String>) -> Unit
 ) {
-    var stars by remember { mutableIntStateOf(5) }
-    var comment by remember { mutableStateOf("") }
-    val chosenTags = remember { mutableStateListOf<String>() }
+    var stars by remember(request.sellerId, request.productId, request.initialRating, request.isAlreadyReviewed) {
+        mutableIntStateOf(request.initialRating.coerceIn(0, 5))
+    }
+    var comment by remember(request.sellerId, request.productId, request.existingComment) {
+        mutableStateOf(request.existingComment)
+    }
+    val chosenTags = remember(request.sellerId, request.productId, request.existingTags) {
+        mutableStateListOf<String>().apply { addAll(request.existingTags) }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1157,41 +1164,78 @@ fun UserRatingModal(
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     (1..5).forEach { idx ->
+                        val selected = idx <= stars
                         Icon(
-                            imageVector = Icons.Rounded.Star,
+                            imageVector = if (selected) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                             contentDescription = "$idx",
-                            tint = if (idx <= stars) HatchAmber400 else HatchTextMuted,
-                            modifier = Modifier.size(32.dp).clickable { stars = idx }
+                            tint = if (selected) HatchAmber400 else HatchTextMuted,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .then(
+                                    if (!request.isAlreadyReviewed) Modifier.clickable { stars = idx }
+                                    else Modifier
+                                )
                         )
                     }
                 }
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    strings.reviewTags.forEach { (arTag, enTag) ->
-                        val label = if (language == AppLanguage.AR) arTag else enTag
-                        val selected = chosenTags.contains(label)
-                        SelectablePill(label, selected) {
-                            if (selected) chosenTags.remove(label) else chosenTags.add(label)
+                if (request.isAlreadyReviewed) {
+                    Text(
+                        text = if (language == AppLanguage.AR) {
+                            "تقييمك السابق: $stars/5 — تم اعتماد التقييم مسبقاً"
+                        } else {
+                            "Your previous rating: $stars/5 — already submitted"
+                        },
+                        color = HatchTextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (comment.isNotBlank()) {
+                        Text(
+                            text = comment,
+                            color = HatchTextPrimary,
+                            fontSize = 12.sp
+                        )
+                    }
+                } else {
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        strings.reviewTags.forEach { (arTag, enTag) ->
+                            val label = if (language == AppLanguage.AR) arTag else enTag
+                            val selected = chosenTags.contains(label)
+                            SelectablePill(label, selected) {
+                                if (selected) chosenTags.remove(label) else chosenTags.add(label)
+                            }
                         }
                     }
+                    HatchField(
+                        value = comment,
+                        onValueChange = { comment = it },
+                        label = if (language == AppLanguage.AR) "اكتب رأيك في التعامل *" else "Write your review *",
+                        singleLine = false,
+                        minLines = 2
+                    )
                 }
-                HatchField(
-                    value = comment,
-                    onValueChange = { comment = it },
-                    label = if (language == AppLanguage.AR) "اكتب رأيك في التعامل *" else "Write your review *",
-                    singleLine = false,
-                    minLines = 2
-                )
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onSubmit(stars, comment, chosenTags.toList()) },
-                enabled = !isSubmitting && comment.trim().length >= 2,
-                colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
-            ) { Text(if (language == AppLanguage.AR) "إرسال التقييم" else "Submit", fontWeight = FontWeight.Black) }
+            if (!request.isAlreadyReviewed) {
+                Button(
+                    onClick = { onSubmit(stars, comment, chosenTags.toList()) },
+                    enabled = !isSubmitting && stars in 1..5 && comment.trim().length >= 2,
+                    colors = ButtonDefaults.buttonColors(containerColor = HatchAmber500, contentColor = HatchBgDark)
+                ) { Text(if (language == AppLanguage.AR) "إرسال التقييم" else "Submit", fontWeight = FontWeight.Black) }
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(if (language == AppLanguage.AR) "إلغاء" else "Cancel", color = HatchTextMuted) }
+            TextButton(onClick = onDismiss) {
+                Text(
+                    if (request.isAlreadyReviewed) {
+                        if (language == AppLanguage.AR) "إغلاق" else "Close"
+                    } else {
+                        if (language == AppLanguage.AR) "إلغاء" else "Cancel"
+                    },
+                    color = HatchTextMuted
+                )
+            }
         }
     )
 }

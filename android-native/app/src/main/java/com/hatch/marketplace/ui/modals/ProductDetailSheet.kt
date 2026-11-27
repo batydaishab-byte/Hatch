@@ -407,10 +407,29 @@ fun ProductDetailSheet(
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                         }
+                                        val ratingPrefix = product.sellerRating?.let { rating ->
+                                            val countSuffix = if (sellerReviews.isNotEmpty()) " (${sellerReviews.size})" else ""
+                                            "⭐ ${String.format(java.util.Locale.US, "%.1f", rating)}$countSuffix • "
+                                        }.orEmpty()
                                         Text(
-                                            text = "⭐ ${String.format(java.util.Locale.US, "%.1f", product.sellerRating)} • ${product.sellerDealsCount} ${if (language == AppLanguage.AR) "صفقة مكتملة" else "deals"}",
+                                            text = "$ratingPrefix${product.sellerDealsCount} ${if (language == AppLanguage.AR) "صفقة مكتملة" else "deals"}",
                                             color = HatchTextMuted,
-                                            fontSize = 11.sp
+                                            fontSize = 11.sp,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .clickable {
+                                                    onOpenReview(
+                                                        ReviewRequest(
+                                                            sellerId = product.sellerId,
+                                                            sellerName = product.sellerName,
+                                                            sellerAvatar = product.sellerAvatar,
+                                                            productId = product.id,
+                                                            conversationId = eligibleReviewConversationId,
+                                                            productTitle = title
+                                                        )
+                                                    )
+                                                }
+                                                .padding(vertical = 2.dp)
                                         )
                                     }
                                 }

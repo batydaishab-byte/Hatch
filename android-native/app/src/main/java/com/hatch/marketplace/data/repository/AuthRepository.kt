@@ -184,7 +184,7 @@ internal class FirebaseAuthSessionGateway(
                 }
                 val parsed = snap?.takeIf { it.exists() }
                     ?.toObject(PublicUser::class.java)
-                    ?.copy(uid = snap.id)
+                    ?.copy(uid = snap.id, rating = null)
                 logger.d(
                     "HatchAuthFlow",
                     "users_public snapshot: exists=${snap?.exists() == true}, fromCache=${snap?.metadata?.isFromCache == true}, hasCity=${!parsed?.city.isNullOrBlank()}"
@@ -664,6 +664,8 @@ class AuthRepository internal constructor(
                 "name" to cleanName,
                 "avatar" to effectiveAvatar,
                 "city" to cleanCity,
+                // Deployed firestore.rules requires numeric 5.0 on users_public create;
+                // client state ignores this placeholder and computes ratings strictly from reviews.
                 "rating" to 5.0,
                 "dealsCompleted" to 0,
                 "reportsCount" to 0,
@@ -870,7 +872,6 @@ class AuthRepository internal constructor(
         if (!existingCommercial.exists()) {
             val publicSnap = db.collection("users_public").document(uid).get().await()
             val joinedDate = publicSnap.getTimestamp("joinedDate") ?: FieldValue.serverTimestamp()
-            val rating = publicSnap.getDouble("rating") ?: 5.0
             val dealsCompleted = (publicSnap.getLong("dealsCompleted") ?: 0L).toInt()
             val reportsCount = (publicSnap.getLong("reportsCount") ?: 0L).toInt()
             val verifiedIdentity = publicSnap.getBoolean("verifiedIdentity") ?: false
@@ -881,7 +882,7 @@ class AuthRepository internal constructor(
                 "name" to cleanName,
                 "avatar" to effectiveAvatar,
                 "city" to cleanCity,
-                "rating" to rating,
+                "rating" to 0.0,
                 "dealsCompleted" to dealsCompleted,
                 "reportsCount" to reportsCount,
                 "verifiedIdentity" to verifiedIdentity,
@@ -1139,7 +1140,7 @@ class AuthRepository internal constructor(
                 return@addSnapshotListener
             }
             val list = snap?.documents?.mapNotNull { doc ->
-                doc.toObject(PublicUser::class.java)?.copy(uid = doc.id)
+                doc.toObject(PublicUser::class.java)?.copy(uid = doc.id, rating = null)
             }.orEmpty()
             trySend(list)
         }
@@ -1169,7 +1170,7 @@ class AuthRepository internal constructor(
                 return@addSnapshotListener
             }
             val list = snap?.documents?.mapNotNull { doc ->
-                val raw = doc.toObject(PublicUser::class.java)?.copy(uid = doc.id) ?: return@mapNotNull null
+                val raw = doc.toObject(PublicUser::class.java)?.copy(uid = doc.id, rating = null) ?: return@mapNotNull null
                 if (hasAdminClaim) raw else MarketplaceLogic.sanitizeCommercialProfileForGuest(raw)
             }.orEmpty()
             trySend(list)

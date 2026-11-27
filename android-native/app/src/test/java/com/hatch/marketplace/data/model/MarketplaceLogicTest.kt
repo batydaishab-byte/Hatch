@@ -2,6 +2,7 @@ package com.hatch.marketplace.data.model
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -240,7 +241,7 @@ class MarketplaceLogicTest {
         assertEquals("uid_fixed_123", upgraded.uid)
         assertEquals(14, upgraded.dealsCompleted)
         assertTrue(upgraded.verifiedIdentity)
-        assertEquals(4.9, upgraded.rating, 0.001)
+        assertEquals(4.9, upgraded.rating ?: 0.0, 0.001)
         assertEquals(AccountType.COMPANY, upgraded.resolvedAccountType())
         assertEquals("https://example.com/company-logo.png", upgraded.displayLogoOrAvatar())
     }
@@ -583,5 +584,62 @@ class MarketplaceLogicTest {
             null,
             MarketplaceLogic.findEligibleReviewConversation(listOf(acceptedSoldConv), products, listOf(existingReview), "buyer_1", "seller_1", "prod_sold")
         )
+    }
+
+    @Test
+    fun unratedAccountsProductsAndDirectoryDefaultToEmptyRatingWithoutAutomaticFiveStars() {
+        val newUser = PublicUser(uid = "u_fresh", name = "مستخدم جديد", city = "الخرطوم")
+        val newProduct = Product(id = "p_fresh", sellerId = "u_fresh", sellerName = "مستخدم جديد")
+        val newReview = UserReview(id = "r_empty")
+
+        assertNull(newUser.rating)
+        assertNull(newProduct.sellerRating)
+        assertEquals(0, newProduct.sellerReviewsCount)
+        assertEquals(0, newReview.rating)
+
+        val storeUser = PublicUser(
+            uid = "u_store_unrated",
+            name = "متجر بدون تقييم",
+            city = "الخرطوم",
+            accountType = AccountType.STORE.wireValue
+        )
+        val dir = MarketplaceLogic.buildCommercialDirectory(
+            users = listOf(storeUser),
+            products = emptyList(),
+            targetType = AccountType.STORE,
+            reviews = emptyList()
+        )
+        assertEquals(1, dir.size)
+        assertNull(dir.first().rating)
+        assertEquals(0, dir.first().reviewsCount)
+    }
+
+    @Test
+    fun computeSellerRatingSummaryCalculatesExactAverageAndFindsPriorReview() {
+        val emptySummary = MarketplaceLogic.computeSellerRatingSummary(emptyList(), "seller_1")
+        assertNull(emptySummary.average)
+        assertEquals(0, emptySummary.count)
+
+        val singleFive = listOf(UserReview(id = "r1", sellerId = "seller_1", reviewerId = "b1", productId = "p1", rating = 5))
+        assertEquals(5.0, MarketplaceLogic.computeSellerAverageRating(singleFive, "seller_1")!!, 0.0001)
+
+        val singleThree = listOf(UserReview(id = "r2", sellerId = "seller_1", reviewerId = "b2", productId = "p2", rating = 3))
+        assertEquals(3.0, MarketplaceLogic.computeSellerAverageRating(singleThree, "seller_1")!!, 0.0001)
+
+        val multiple = listOf(
+            UserReview(id = "r1", sellerId = "seller_1", reviewerId = "b1", productId = "p1", rating = 5),
+            UserReview(id = "r2", sellerId = "seller_1", reviewerId = "b2", productId = "p2", rating = 2),
+            UserReview(id = "r3", sellerId = "seller_1", reviewerId = "b3", productId = "p3", rating = 2),
+            UserReview(id = "r_other", sellerId = "seller_2", reviewerId = "b4", productId = "p4", rating = 5),
+            UserReview(id = "r_invalid", sellerId = "seller_1", reviewerId = "b5", productId = "p5", rating = 0)
+        )
+        val summary = MarketplaceLogic.computeSellerRatingSummary(multiple, "seller_1")
+        assertEquals(3.0, summary.average!!, 0.0001)
+        assertEquals(3, summary.count)
+
+        val foundExact = MarketplaceLogic.findExistingReviewByUser(multiple, reviewerId = "b2", sellerId = "seller_1", productId = "p2")
+        assertEquals(2, foundExact?.rating)
+        assertNull(MarketplaceLogic.findExistingReviewByUser(multiple, reviewerId = "b2", sellerId = "seller_1", productId = "p999"))
+        assertEquals(2, MarketplaceLogic.findExistingReviewByUser(multiple, reviewerId = "b2", sellerId = "seller_1", productId = null)?.rating)
     }
 }

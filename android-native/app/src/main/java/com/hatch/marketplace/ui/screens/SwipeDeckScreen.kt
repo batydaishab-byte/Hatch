@@ -926,12 +926,14 @@ private fun SwipeCardContent(
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         )
                     }
-                    Text(
-                        text = "★ ${String.format(Locale.US, "%.1f", product.sellerRating.takeIf { it > 0 } ?: 4.9)}",
-                        color = HatchAmber400,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    product.sellerRating?.takeIf { it > 0 }?.let { rating ->
+                        Text(
+                            text = "★ ${String.format(Locale.US, "%.1f", rating)}",
+                            color = HatchAmber400,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     if (product.sellerVerified) {
                         Icon(
                             imageVector = Icons.Rounded.Verified,

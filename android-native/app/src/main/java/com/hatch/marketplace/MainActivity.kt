@@ -72,6 +72,7 @@ import com.hatch.marketplace.ui.screens.ProfileScreen
 import com.hatch.marketplace.ui.screens.SplashScreen
 import com.hatch.marketplace.ui.screens.SwipeDeckScreen
 import com.hatch.marketplace.ui.state.HatchMainViewModel
+import com.hatch.marketplace.ui.state.ReviewRequest
 import com.hatch.marketplace.ui.theme.HatchBgDark
 import com.hatch.marketplace.ui.theme.HatchTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -419,7 +420,18 @@ fun HatchMarketplaceRoot(
                             onWatchRewardedAd = { viewModel.launchRewardedAdForCredit() },
                             onBoostProductWithCredit = { viewModel.boostListingWithExistingCredit(it) },
                             onOpenSafetyGuide = { viewModel.openSafetyGuide() },
-                            onOpenNativeInfo = { viewModel.openNativeInfoDialog() }
+                            onOpenNativeInfo = { viewModel.openNativeInfoDialog() },
+                            onRatingClick = {
+                                state.currentUser?.let { u ->
+                                    viewModel.openReviewModal(
+                                        ReviewRequest(
+                                            sellerId = u.uid,
+                                            sellerName = u.name,
+                                            sellerAvatar = u.avatar
+                                        )
+                                    )
+                                }
+                            }
                         )
 
                         MainTab.ADMIN -> {
@@ -568,7 +580,8 @@ fun HatchMarketplaceRoot(
                 },
                 onGuestContactPrompt = {
                     viewModel.requestGuestPrompt(GuestPromptReason.CONTACT_OR_BUY)
-                }
+                },
+                onOpenReview = { req -> viewModel.openReviewModal(req) }
             )
         }
 
@@ -578,12 +591,14 @@ fun HatchMarketplaceRoot(
                 state.commercialProfiles,
                 state.currentUser,
                 state.products,
+                state.reviews,
                 dirType
             ) {
                 MarketplaceLogic.buildCommercialDirectory(
                     users = state.directoryUsers,
                     products = state.products,
-                    targetType = dirType
+                    targetType = dirType,
+                    reviews = state.reviews
                 )
             }
             CommercialDirectoryModal(

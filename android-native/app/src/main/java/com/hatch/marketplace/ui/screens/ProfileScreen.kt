@@ -99,7 +99,8 @@ fun ProfileScreen(
     onWatchRewardedAd: () -> Unit,
     onBoostProductWithCredit: (String) -> Unit,
     onOpenSafetyGuide: () -> Unit,
-    onOpenNativeInfo: () -> Unit
+    onOpenNativeInfo: () -> Unit,
+    onRatingClick: () -> Unit = {}
 ) {
     if (!isSignedIn || publicUser == null) {
         Box(modifier = Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
@@ -253,7 +254,10 @@ fun ProfileScreen(
 
             // Stats Strip
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                StatChip("⭐ ${String.format(java.util.Locale.US, "%.1f", publicUser.rating)}", if (language == AppLanguage.AR) "التقييم" else "Rating")
+                val ratingValueText = publicUser.rating?.let { r ->
+                    "⭐ ${String.format(java.util.Locale.US, "%.1f", r)}"
+                }.orEmpty()
+                StatChip(ratingValueText, if (language == AppLanguage.AR) "التقييم" else "Rating", onClick = onRatingClick)
                 StatChip("${publicUser.dealsCompleted}", if (language == AppLanguage.AR) "صفقات ناجحة" else "Deals")
                 StatChip("${activeAds.size}", if (language == AppLanguage.AR) "إعلانات نشطة" else "Active")
                 StatChip("$rewardCredits", if (language == AppLanguage.AR) "رصيد تمييز" else "Credits")
@@ -469,8 +473,18 @@ fun ProfileScreen(
 }
 
 @Composable
-private fun StatChip(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun StatChip(value: String, label: String, onClick: (() -> Unit)? = null) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = if (onClick != null) {
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onClick() }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        } else {
+            Modifier
+        }
+    ) {
         Text(value, color = HatchAmber400, fontWeight = FontWeight.Black, fontSize = 15.sp)
         Text(label, color = HatchTextMuted, fontSize = 10.sp)
     }

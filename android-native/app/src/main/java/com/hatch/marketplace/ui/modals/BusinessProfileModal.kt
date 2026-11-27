@@ -73,6 +73,7 @@ import com.hatch.marketplace.data.model.AccountType
 import com.hatch.marketplace.data.model.AppLanguage
 import com.hatch.marketplace.data.model.CommercialDirectoryEntry
 import com.hatch.marketplace.data.model.HatchFormatters
+import com.hatch.marketplace.data.model.MarketplaceLogic
 import com.hatch.marketplace.data.model.Product
 import com.hatch.marketplace.data.model.PublicUser
 import com.hatch.marketplace.data.model.UserReview
@@ -80,6 +81,7 @@ import com.hatch.marketplace.data.model.displayLogoOrAvatar
 import com.hatch.marketplace.ui.components.BadgePill
 import com.hatch.marketplace.ui.components.ProductCard
 import com.hatch.marketplace.ui.i18n.HatchStrings
+import com.hatch.marketplace.ui.state.ReviewRequest
 import com.hatch.marketplace.ui.theme.HatchAmber400
 import com.hatch.marketplace.ui.theme.HatchAmber500
 import com.hatch.marketplace.ui.theme.HatchBgDark
@@ -109,7 +111,8 @@ fun BusinessProfileModal(
     onToggleFavorite: (String) -> Unit,
     onStartChatWithProduct: (Product) -> Unit,
     onEditOwnProfile: () -> Unit,
-    onGuestContactPrompt: () -> Unit = {}
+    onGuestContactPrompt: () -> Unit = {},
+    onOpenReview: (ReviewRequest) -> Unit = {}
 ) {
     val context = LocalContext.current
     val firstProd = sellerProducts.firstOrNull()
@@ -127,11 +130,8 @@ fun BusinessProfileModal(
         ?: firstProd?.city.orEmpty()
     val verified = sellerUser?.verifiedIdentity ?: firstProd?.sellerVerified ?: false
     val dealsCount = sellerUser?.dealsCompleted ?: firstProd?.sellerDealsCount ?: 0
-    val avgRating = if (sellerReviews.isNotEmpty()) {
-        sellerReviews.map { it.rating }.average()
-    } else {
-        sellerUser?.rating ?: firstProd?.sellerRating ?: 5.0
-    }
+    val ratingSummary = MarketplaceLogic.computeSellerRatingSummary(sellerReviews, sellerId)
+    val avgRating = ratingSummary.average ?: sellerUser?.rating
     val typeLabel = strings.accountTypeLabel(resolvedType.wireValue)
     val typeIcon = when (resolvedType) {
         AccountType.COMPANY -> Icons.Rounded.Business
@@ -287,9 +287,21 @@ fun BusinessProfileModal(
                                     .padding(vertical = 10.dp),
                                 horizontalArrangement = Arrangement.SpaceEvenly
                             ) {
+                                val ratingValueText = avgRating?.let { r ->
+                                    "⭐ ${String.format(Locale.US, "%.1f", r)}"
+                                }.orEmpty()
                                 StoreStatItem(
-                                    value = "⭐ ${String.format(Locale.US, "%.1f", avgRating)}",
-                                    label = if (language == AppLanguage.AR) "التقييم" else "Rating"
+                                    value = ratingValueText,
+                                    label = if (language == AppLanguage.AR) "التقييم" else "Rating",
+                                    onClick = {
+                                        onOpenReview(
+                                            ReviewRequest(
+                                                sellerId = sellerId,
+                                                sellerName = displayName,
+                                                sellerAvatar = displayLogo
+                                            )
+                                        )
+                                    }
                                 )
                                 StoreStatItem(
                                     value = "$dealsCount",
@@ -413,8 +425,18 @@ fun BusinessProfileModal(
 }
 
 @Composable
-private fun StoreStatItem(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun StoreStatItem(value: String, label: String, onClick: (() -> Unit)? = null) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = if (onClick != null) {
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onClick() }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        } else {
+            Modifier
+        }
+    ) {
         Text(value, color = HatchAmber400, fontWeight = FontWeight.Black, fontSize = 14.sp)
         Text(label, color = HatchTextMuted, fontSize = 10.sp)
     }
@@ -676,17 +698,19 @@ private fun CommercialDirectoryCard(
                             )
                         }
                     }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Icon(Icons.Rounded.Star, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(12.dp))
-                        Text(
-                            text = String.format(Locale.US, "%.1f", entry.rating),
-                            color = HatchAmber400,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    if (entry.rating != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(Icons.Rounded.Star, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(12.dp))
+                            Text(
+                                text = String.format(Locale.US, "%.1f", entry.rating),
+                                color = HatchAmber400,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

@@ -591,7 +591,6 @@ class ProductRepository @Inject constructor(
             "sellerId" to seller.uid,
             "sellerName" to brand.sellerName,
             "sellerAvatar" to brand.sellerAvatar,
-            "sellerRating" to seller.rating,
             "sellerDealsCount" to seller.dealsCompleted,
             "sellerVerified" to seller.verifiedIdentity,
             "sellerAccountType" to brand.sellerAccountType,
@@ -606,6 +605,9 @@ class ProductRepository @Inject constructor(
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )
+        seller.rating?.takeIf { it in 1.0..5.0 }?.let { validRating ->
+            payload["sellerRating"] = validRating
+        }
         if (brand.sellerBusinessActivity.isNotEmpty()) {
             payload["sellerBusinessActivity"] = brand.sellerBusinessActivity
         }

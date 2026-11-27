@@ -80,7 +80,24 @@ data class ReviewRequest(
     val sellerAvatar: String = "",
     val productId: String? = null,
     val conversationId: String? = null,
-    val productTitle: String? = null
+    val productTitle: String? = null,
+    val initialRating: Int = 0,
+    val existingComment: String = "",
+    val existingTags: List<String> = emptyList(),
+    val isAlreadyReviewed: Boolean = false
+)
+
+data class ReviewSubmitRequest(
+    val sellerId: String,
+    val reviewerId: String,
+    val reviewerName: String,
+    val reviewerAvatar: String,
+    val rating: Int,
+    val comment: String,
+    val tags: List<String>,
+    val productId: String?,
+    val conversationId: String?,
+    val productTitle: String?
 )
 
 data class HatchUiState(
@@ -226,7 +243,8 @@ internal data class HatchViewModelStreams(
     val fetchAdminQuotaStatus: suspend (Boolean) -> Result<CloudinaryQuotaStatus> = {
         Result.success(CloudinaryQuotaStatus())
     },
-    val publishListing: (suspend (ListingPublishRequest) -> Result<String>)? = null
+    val publishListing: (suspend (ListingPublishRequest) -> Result<String>)? = null,
+    val submitReview: (suspend (ReviewSubmitRequest) -> Result<Unit>)? = null
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -276,7 +294,21 @@ class HatchMainViewModel internal constructor(
             selectedCityFlow = prefs.selectedCityFlow,
             searchHistoryFlow = prefs.searchHistoryFlow,
             isOnlineFlow = networkMonitor.isOnlineFlow,
-            fetchAdminQuotaStatus = monetizationRepo::fetchAdminQuotaStatus
+            fetchAdminQuotaStatus = monetizationRepo::fetchAdminQuotaStatus,
+            submitReview = { req ->
+                interactionRepo.submitReview(
+                    sellerId = req.sellerId,
+                    reviewerId = req.reviewerId,
+                    reviewerName = req.reviewerName,
+                    reviewerAvatar = req.reviewerAvatar,
+                    rating = req.rating,
+                    comment = req.comment,
+                    tags = req.tags,
+                    productId = req.productId,
+                    conversationId = req.conversationId,
+                    productTitle = req.productTitle
+                )
+            }
         )
     )
 
@@ -515,25 +547,40 @@ class HatchMainViewModel internal constructor(
         metaCombined,
         settingsCombined
     ) { local, core, meta, settings ->
-        val (publicUsers, commercialProfiles) = meta.usersAndCommercial
+        val (rawPublicUsers, rawCommercialProfiles) = meta.usersAndCommercial
+        val validReviews = meta.reviews.filter { it.sellerId.isNotBlank() && it.rating in 1..5 }
+        val ratingSummaryBySeller = validReviews
+            .map { it.sellerId }
+            .distinct()
+            .associateWith { sellerId ->
+                MarketplaceLogic.computeSellerRatingSummary(validReviews, sellerId)
+            }
+        val publicUsers = rawPublicUsers.map { user ->
+            user.copy(rating = ratingSummaryBySeller[user.uid]?.average)
+        }
+        val commercialProfiles = rawCommercialProfiles.map { user ->
+            user.copy(rating = ratingSummaryBySeller[user.uid]?.average)
+        }
+        val enrichedAuth = core.auth.copy(
+            publicProfile = core.auth.publicProfile?.let { profile ->
+                profile.copy(rating = ratingSummaryBySeller[profile.uid]?.average)
+            }
+        )
         val mergedDirectoryUsers = MarketplaceLogic.mergeUsersAndCommercialProfiles(
             publicUsers = publicUsers,
             commercialProfiles = commercialProfiles,
-            currentUser = core.auth.publicProfile
+            currentUser = enrichedAuth.publicProfile
         )
-        val reviewsBySeller = meta.reviews.groupBy { it.sellerId }
         val usersById = mergedDirectoryUsers.associateBy { it.uid }
         val enrichedProducts = core.productsPage.products.map { p ->
-            val sellerReviews = reviewsBySeller[p.sellerId].orEmpty()
+            val summary = ratingSummaryBySeller[p.sellerId]
+            val avgRating = summary?.average
+            val reviewsCount = summary?.count ?: 0
             val liveSeller = usersById[p.sellerId]
-            val avgRating = if (sellerReviews.isNotEmpty()) {
-                sellerReviews.map { it.rating }.average()
-            } else {
-                p.sellerRating
-            }
             if (liveSeller != null) {
                 p.copy(
                     sellerRating = avgRating,
+                    sellerReviewsCount = reviewsCount,
                     sellerName = liveSeller.name.ifBlank { p.sellerName },
                     sellerAvatar = liveSeller.displayLogoOrAvatar().ifBlank { p.sellerAvatar },
                     sellerAccountType = liveSeller.accountType,
@@ -541,23 +588,31 @@ class HatchMainViewModel internal constructor(
                     sellerDealsCount = maxOf(p.sellerDealsCount, liveSeller.dealsCompleted),
                     sellerVerified = liveSeller.verifiedIdentity
                 )
-            } else if (sellerReviews.isNotEmpty()) {
-                p.copy(sellerRating = avgRating)
             } else {
-                p
+                p.copy(
+                    sellerRating = avgRating,
+                    sellerReviewsCount = reviewsCount
+                )
             }
         }
+        val resolvedSelectedProduct = local.selectedProduct?.let { sel ->
+            enrichedProducts.firstOrNull { it.id == sel.id } ?: sel.copy(
+                sellerRating = ratingSummaryBySeller[sel.sellerId]?.average,
+                sellerReviewsCount = ratingSummaryBySeller[sel.sellerId]?.count ?: 0
+            )
+        }
 
-        val needsOnboardingNow = core.auth.isSignedIn && (core.auth.needsProfileOnboarding || local.forceOnboardingStep)
-        val effectiveShowAuthSheet = if (core.auth.isSignedIn) needsOnboardingNow else local.showAuthSheet
-        val effectiveGuestPrompt = if (core.auth.isSignedIn) null else local.guestPromptReason
+        val needsOnboardingNow = enrichedAuth.isSignedIn && (enrichedAuth.needsProfileOnboarding || local.forceOnboardingStep)
+        val effectiveShowAuthSheet = if (enrichedAuth.isSignedIn) needsOnboardingNow else local.showAuthSheet
+        val effectiveGuestPrompt = if (enrichedAuth.isSignedIn) null else local.guestPromptReason
 
         local.copy(
             language = settings.language,
             isOnline = settings.isOnline,
-            firebaseConnected = core.auth.isFirebaseConnected,
-            auth = core.auth,
+            firebaseConnected = enrichedAuth.isFirebaseConnected,
+            auth = enrichedAuth,
             products = enrichedProducts,
+            selectedProduct = resolvedSelectedProduct,
             productsLimit = core.productsPage.requestedLimit,
             hasMoreProducts = core.productsPage.hasMore,
             favoriteIds = core.favorites,
@@ -1600,18 +1655,19 @@ class HatchMainViewModel internal constructor(
     fun openReviewModal(request: ReviewRequest) {
         if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val uid = uiState.value.auth.uid ?: return
-        if (request.sellerId == uid) {
+        if (request.sellerId.isBlank() || request.sellerId == uid) {
             showToast(if (isArabic()) "لا يمكنك تقييم حسابك الشخصي" else "You cannot review your own account", ToastType.WARNING)
             return
         }
-        val alreadyReviewedSpecific = request.productId != null &&
-            MarketplaceLogic.hasBuyerAlreadyReviewedProduct(uiState.value.reviews, uid, request.productId)
-        if (alreadyReviewedSpecific) {
-            showToast(
-                if (isArabic()) "لقد قمت بتقييم هذه الصفقة مسبقاً" else "You have already reviewed this completed deal",
-                ToastType.INFO
+        val priorProductReview = if (request.productId != null) {
+            MarketplaceLogic.findExistingReviewByUser(
+                reviews = uiState.value.reviews,
+                reviewerId = uid,
+                sellerId = request.sellerId,
+                productId = request.productId
             )
-            return
+        } else {
+            null
         }
         val completedConv = MarketplaceLogic.findEligibleReviewConversation(
             conversations = uiState.value.conversations,
@@ -1622,6 +1678,29 @@ class HatchMainViewModel internal constructor(
             productId = request.productId,
             isSuspended = uiState.value.isCurrentlySuspended
         )
+        val priorSellerReview = priorProductReview ?: MarketplaceLogic.findExistingReviewByUser(
+            reviews = uiState.value.reviews,
+            reviewerId = uid,
+            sellerId = request.sellerId,
+            productId = null
+        )
+        if (priorProductReview != null || (completedConv == null && priorSellerReview != null)) {
+            val existing = priorProductReview ?: priorSellerReview!!
+            _localState.update {
+                it.copy(
+                    reviewRequest = request.copy(
+                        productId = existing.productId ?: request.productId,
+                        conversationId = existing.conversationId ?: request.conversationId,
+                        productTitle = request.productTitle ?: existing.productTitle,
+                        initialRating = existing.rating.coerceIn(1, 5),
+                        existingComment = existing.comment,
+                        existingTags = existing.tags,
+                        isAlreadyReviewed = true
+                    )
+                )
+            }
+            return
+        }
         if (completedConv == null) {
             showToast(
                 if (isArabic()) {
@@ -1638,7 +1717,11 @@ class HatchMainViewModel internal constructor(
                 reviewRequest = request.copy(
                     productId = completedConv.productId,
                     conversationId = completedConv.id,
-                    productTitle = request.productTitle ?: completedConv.productTitle
+                    productTitle = request.productTitle ?: completedConv.productTitle,
+                    initialRating = 0,
+                    existingComment = "",
+                    existingTags = emptyList(),
+                    isAlreadyReviewed = false
                 )
             )
         }
@@ -1650,20 +1733,49 @@ class HatchMainViewModel internal constructor(
         if (!requireActiveUserOrPrompt(GuestPromptReason.RATE_OR_REPORT)) return
         val req = uiState.value.reviewRequest ?: return
         val reviewer = uiState.value.currentUser ?: return
-        val repo = interactionRepo ?: return
+        if (req.sellerId == reviewer.uid) {
+            showToast(if (isArabic()) "لا يمكنك تقييم حسابك الشخصي" else "You cannot review your own account", ToastType.WARNING)
+            return
+        }
+        if (req.isAlreadyReviewed || MarketplaceLogic.hasBuyerAlreadyReviewedProduct(uiState.value.reviews, reviewer.uid, req.productId)) {
+            showToast(if (isArabic()) "لقد قمت بتقييم هذا الحساب مسبقاً" else "You have already rated this account", ToastType.INFO)
+            return
+        }
+        if (rating !in 1..5) {
+            showToast(if (isArabic()) "يرجى اختيار التقييم من 1 إلى 5 نجوم" else "Please select a 1 to 5 star rating", ToastType.WARNING)
+            return
+        }
+        val submitFn: suspend (ReviewSubmitRequest) -> Result<Unit> = streams.submitReview ?: interactionRepo?.let { repo ->
+            { r: ReviewSubmitRequest ->
+                repo.submitReview(
+                    sellerId = r.sellerId,
+                    reviewerId = r.reviewerId,
+                    reviewerName = r.reviewerName,
+                    reviewerAvatar = r.reviewerAvatar,
+                    rating = r.rating,
+                    comment = r.comment,
+                    tags = r.tags,
+                    productId = r.productId,
+                    conversationId = r.conversationId,
+                    productTitle = r.productTitle
+                )
+            }
+        } ?: return
         viewModelScope.launch {
             setSubmitting(true)
-            repo.submitReview(
-                sellerId = req.sellerId,
-                reviewerId = reviewer.uid,
-                reviewerName = reviewer.name,
-                reviewerAvatar = reviewer.avatar,
-                rating = rating,
-                comment = comment,
-                tags = tags,
-                productId = req.productId,
-                conversationId = req.conversationId,
-                productTitle = req.productTitle
+            submitFn(
+                ReviewSubmitRequest(
+                    sellerId = req.sellerId,
+                    reviewerId = reviewer.uid,
+                    reviewerName = reviewer.name,
+                    reviewerAvatar = reviewer.avatar,
+                    rating = rating,
+                    comment = comment,
+                    tags = tags,
+                    productId = req.productId,
+                    conversationId = req.conversationId,
+                    productTitle = req.productTitle
+                )
             ).onSuccess {
                 _localState.update { it.copy(reviewRequest = null) }
                 showToast(if (isArabic()) "شكراً لتقييمك الصادق ⭐" else "Review submitted ⭐", ToastType.SUCCESS)

@@ -243,14 +243,16 @@ fun ProductCard(
                         Icon(Icons.Rounded.Verified, contentDescription = strings.verifiedBadge, tint = HatchAmber400, modifier = Modifier.size(12.dp))
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Icon(Icons.Rounded.Star, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(11.dp))
-                    Text(
-                        text = String.format(java.util.Locale.US, "%.1f", product.sellerRating),
-                        color = HatchTextMuted,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                product.sellerRating?.let { rating ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(Icons.Rounded.Star, contentDescription = null, tint = HatchAmber400, modifier = Modifier.size(11.dp))
+                        Text(
+                            text = String.format(java.util.Locale.US, "%.1f", rating),
+                            color = HatchTextMuted,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

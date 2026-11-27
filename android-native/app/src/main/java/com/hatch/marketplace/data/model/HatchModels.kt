@@ -233,7 +233,7 @@ data class PublicUser(
     val name: String = "",
     val avatar: String = "",
     val city: String = "",
-    val rating: Double = 5.0,
+    val rating: Double? = null,
     val dealsCompleted: Int = 0,
     val reportsCount: Int = 0,
     val verifiedIdentity: Boolean = false,
@@ -285,7 +285,8 @@ data class Product(
     val sellerId: String = "",
     val sellerName: String = "",
     val sellerAvatar: String = "",
-    val sellerRating: Double = 5.0,
+    val sellerRating: Double? = null,
+    val sellerReviewsCount: Int = 0,
     val sellerDealsCount: Int = 0,
     val sellerVerified: Boolean = false,
     val sellerAccountType: String = AccountType.PERSONAL.wireValue,
@@ -389,7 +390,7 @@ data class UserReview(
     val reviewerId: String = "",
     val reviewerName: String = "",
     val reviewerAvatar: String = "",
-    val rating: Int = 5,
+    val rating: Int = 0,
     val comment: String = "",
     val tags: List<String> = emptyList(),
     val productId: String? = null,
@@ -527,10 +528,16 @@ data class CommercialDirectoryEntry(
     val accountType: AccountType,
     val businessActivity: String,
     val city: String,
-    val rating: Double,
+    val rating: Double?,
+    val reviewsCount: Int = 0,
     val dealsCompleted: Int,
     val verifiedIdentity: Boolean,
     val products: List<Product>
+)
+
+data class SellerRatingSummary(
+    val average: Double?,
+    val count: Int
 )
 
 object HatchFormatters {
@@ -796,10 +803,51 @@ object MarketplaceLogic {
                     .thenByDescending { it.createdAt?.seconds ?: 0L }
             )
 
+    fun computeSellerRatingSummary(
+        reviews: List<UserReview>,
+        sellerId: String
+    ): SellerRatingSummary {
+        if (sellerId.isBlank()) return SellerRatingSummary(average = null, count = 0)
+        val validRatings = reviews
+            .asSequence()
+            .filter { it.sellerId == sellerId && it.rating in 1..5 }
+            .map { it.rating }
+            .toList()
+        if (validRatings.isEmpty()) return SellerRatingSummary(average = null, count = 0)
+        return SellerRatingSummary(
+            average = validRatings.average(),
+            count = validRatings.size
+        )
+    }
+
+    fun computeSellerAverageRating(
+        reviews: List<UserReview>,
+        sellerId: String
+    ): Double? = computeSellerRatingSummary(reviews, sellerId).average
+
+    fun findExistingReviewByUser(
+        reviews: List<UserReview>,
+        reviewerId: String?,
+        sellerId: String,
+        productId: String? = null
+    ): UserReview? {
+        if (reviewerId.isNullOrBlank() || sellerId.isBlank()) return null
+        return if (!productId.isNullOrBlank()) {
+            reviews.firstOrNull {
+                it.reviewerId == reviewerId && it.sellerId == sellerId && it.productId == productId
+            }
+        } else {
+            reviews.firstOrNull {
+                it.reviewerId == reviewerId && it.sellerId == sellerId
+            }
+        }
+    }
+
     fun buildCommercialDirectory(
         users: List<PublicUser>,
         products: List<Product>,
-        targetType: AccountType
+        targetType: AccountType,
+        reviews: List<UserReview> = emptyList()
     ): List<CommercialDirectoryEntry> {
         if (!targetType.isCommercial()) return emptyList()
 
@@ -845,6 +893,13 @@ object MarketplaceLogic {
                 ?: firstProd?.sellerName?.takeIf { it.isNotBlank() }
                 ?: return@mapNotNull null
 
+            val reviewSummary = computeSellerRatingSummary(reviews, sellerId)
+            val resolvedRating = if (reviewSummary.count > 0) {
+                reviewSummary.average
+            } else {
+                liveUser?.rating ?: firstProd?.sellerRating
+            }
+
             CommercialDirectoryEntry(
                 sellerId = sellerId,
                 name = displayName,
@@ -855,7 +910,8 @@ object MarketplaceLogic {
                     ?: firstProd?.sellerBusinessActivity.orEmpty(),
                 city = liveUser?.city?.takeIf { it.isNotBlank() }
                     ?: firstProd?.city.orEmpty(),
-                rating = liveUser?.rating ?: firstProd?.sellerRating ?: 5.0,
+                rating = resolvedRating,
+                reviewsCount = reviewSummary.count,
                 dealsCompleted = maxOf(liveUser?.dealsCompleted ?: 0, firstProd?.sellerDealsCount ?: 0),
                 verifiedIdentity = liveUser?.verifiedIdentity ?: (firstProd?.sellerVerified == true),
                 products = sellerProducts
@@ -863,7 +919,7 @@ object MarketplaceLogic {
         }.sortedWith(
             compareByDescending<CommercialDirectoryEntry> { it.products.size }
                 .thenByDescending { it.verifiedIdentity }
-                .thenByDescending { it.rating }
+                .thenByDescending { it.rating ?: -1.0 }
                 .thenBy { it.name }
         )
     }
